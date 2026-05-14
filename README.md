@@ -6,10 +6,11 @@
 
 ## 特性
 
-- **多引擎支持**：MiMo V2、MiMo V2.5（预置音色/音色设计/音色克隆）、OpenAI 兼容接口
+- **多引擎支持**：MiMo V2/V2.5、OpenAI 兼容、火山引擎、阿里云百炼、Azure、ElevenLabs、自定义 HTTP
 - **无缝集成**：注册为 AstrBot TTS Provider，无需修改 AstrBot 配置
 - **热切换**：通过指令在运行时切换不同引擎
 - **WebUI 配置**：所有参数均可在 AstrBot 管理面板中可视化配置
+- **自定义 HTTP**：通过模板化配置接入任意 HTTP TTS API，无需编写代码
 
 ## 安装
 
@@ -38,6 +39,49 @@ https://github.com/CyrilPeng/astrbot_plugin_universal_tts
 | MiMo-V2.5-VoiceDesign | 通过文本描述设计音色，无需音频样本 |
 | MiMo-V2.5-VoiceClone | 基于音频样本复刻任意音色 |
 | OpenAI 兼容 TTS | 兼容 OpenAI `/v1/audio/speech` 接口的服务 |
+| 火山引擎 TTS | 字节跳动火山引擎 SAMI HTTP API |
+| 阿里云百炼 TTS | 阿里云百炼 CosyVoice，DashScope 兼容接口 |
+| Azure TTS | 微软 Azure Cognitive Services 语音服务 |
+| ElevenLabs TTS | ElevenLabs 高质量多语言语音合成 |
+| 自定义 HTTP TTS | 模板化配置接入任意 HTTP TTS API |
+
+## 自定义 HTTP 引擎
+
+自定义 HTTP 引擎允许你通过模板化配置接入任何 HTTP TTS API，无需编写代码。
+
+### 占位符
+
+| 占位符 | 说明 |
+|--------|------|
+| `${TEXT}` | 待合成的文本（LLM 回复内容） |
+| `${API_KEY}` | 用户配置的 API 密钥 |
+| `${VOICE_SAMPLE_BASE64}` | 音色样本 base64 编码（含 data URI 前缀） |
+| `${VOICE_SAMPLE_BASE64_RAW}` | 音色样本纯 base64 编码 |
+| `${VOICE_SAMPLE_PATH}` | 音色样本文件路径 |
+
+### 配置示例
+
+**接入返回二进制音频的 API：**
+```
+URL: https://api.example.com/v1/tts
+Method: POST
+Headers: Authorization: Bearer ${API_KEY}
+Body: {"text": "${TEXT}", "voice": "alloy"}
+Response Type: binary
+Audio Format: mp3
+```
+
+**接入返回 JSON 中 base64 音频的 API：**
+```
+URL: https://api.example.com/v1/chat/completions
+Method: POST
+Headers: api-key: ${API_KEY}
+Body: {"model": "tts-model", "messages": [{"role": "assistant", "content": "${TEXT}"}]}
+Response Type: json
+Response Audio Path: choices.0.message.audio.data
+Response Audio Encoding: base64
+Audio Format: wav
+```
 
 ## 指令
 
@@ -60,10 +104,11 @@ https://github.com/CyrilPeng/astrbot_plugin_universal_tts
 
 ## 扩展新引擎
 
-1. 在 `engines/` 目录下新建文件，继承 `TTSEngine`
-2. 实现 `synthesize(text) -> (bytes, format)` 方法
-3. 在 `engines/__init__.py` 的 `ENGINE_REGISTRY` 中注册
-4. 在 `_conf_schema.json` 的 `templates` 中添加对应配置模板
+1. 在 `engines/` 目录下新建提供商子目录（如 `engines/newprovider/`）
+2. 创建引擎类，继承 `TTSEngine`，实现 `synthesize(text) -> (bytes, format)` 方法
+3. 在子目录的 `__init__.py` 中导出引擎类
+4. 在 `engines/__init__.py` 中导入并注册到 `ENGINE_REGISTRY`
+5. 在 `_conf_schema.json` 的 `templates` 中添加对应配置模板
 
 ## 依赖
 

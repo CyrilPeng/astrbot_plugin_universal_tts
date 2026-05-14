@@ -17,257 +17,159 @@
     "type": "file",
     "default": [],
     "file_types": ["mp3", "wav"],
-    "hint": "上传用于音色克隆的音频样本（mp3/wav）。在 VoiceClone 引擎中填写文件名即可选用对应样本。"
+    "hint": "上传用于音色克隆的音频样本（mp3/wav）。"
   },
   "active_engine": {
     "description": "当前生效的引擎实例名称",
     "type": "string",
     "default": "",
-    "hint": "填写下方引擎列表中某个实例的名称。留空则使用列表中的第一个。"
+    "hint": "填写下方引擎列表中某个实例的名称。留空则使用第一个。"
   },
   "engines": {
     "type": "template_list",
-    "description": "TTS 引擎配置列表（可添加多个引擎实例，第一个为默认使用）",
+    "description": "TTS 引擎配置列表（可添加多个实例，第一个为默认）",
     "templates": {
       "mimo_v2": {
-        "name": "MiMo-V2-TTS",
-        "hint": "小米 MiMo V2 语音合成，支持预置音色和 <style> 标签风格控制",
+        "name": "[MiMo] V2-TTS（预置音色 + style 标签）",
         "items": {
-          "instance_name": {
-            "description": "实例名称（用于标识和切换）",
-            "type": "string",
-            "default": "mimo_v2"
-          },
-          "api_key": {
-            "description": "API Key",
-            "type": "string",
-            "default": ""
-          },
-          "api_base": {
-            "description": "API Base URL",
-            "type": "string",
-            "default": "https://api.xiaomimimo.com/v1"
-          },
-          "model": {
-            "description": "模型名称",
-            "type": "string",
-            "default": "mimo-v2-tts"
-          },
-          "voice": {
-            "description": "预置音色",
-            "type": "string",
-            "default": "mimo_default",
-            "options": ["mimo_default", "default_zh", "default_en"]
-          },
-          "format": {
-            "description": "输出音频格式",
-            "type": "string",
-            "default": "wav",
-            "options": ["wav", "pcm16"]
-          },
-          "style": {
-            "description": "风格标签（如：开心、东北话、唱歌）留空则不添加",
-            "type": "string",
-            "default": ""
-          },
-          "seed_text": {
-            "description": "种子文本（放入 user message，可影响语气）",
-            "type": "text",
-            "default": ""
-          },
-          "timeout": {
-            "description": "请求超时（秒）",
-            "type": "int",
-            "default": 30
-          }
+          "instance_name": { "description": "实例名称", "type": "string", "default": "mimo_v2" },
+          "api_key": { "description": "API Key", "type": "string", "default": "" },
+          "api_base": { "description": "API Base URL", "type": "string", "default": "https://api.xiaomimimo.com/v1" },
+          "model": { "description": "模型名称", "type": "string", "default": "mimo-v2-tts" },
+          "voice": { "description": "预置音色", "type": "string", "default": "mimo_default", "options": ["mimo_default", "default_zh", "default_en"] },
+          "format": { "description": "输出格式", "type": "string", "default": "wav", "options": ["wav", "pcm16"] },
+          "style": { "description": "风格标签（开心、东北话、唱歌等）", "type": "string", "default": "" },
+          "seed_text": { "description": "种子文本（影响语气）", "type": "text", "default": "" },
+          "timeout": { "description": "超时（秒）", "type": "int", "default": 30 }
         }
       },
       "mimo_v2_5": {
-        "name": "MiMo-V2.5-TTS（预置音色）",
-        "hint": "小米 MiMo V2.5 语音合成，支持更多精品音色和自然语言风格控制",
+        "name": "[MiMo] V2.5-TTS（精品音色 + 自然语言控制）",
         "items": {
-          "instance_name": {
-            "description": "实例名称",
-            "type": "string",
-            "default": "mimo_v2.5"
-          },
-          "api_key": {
-            "description": "API Key",
-            "type": "string",
-            "default": ""
-          },
-          "api_base": {
-            "description": "API Base URL",
-            "type": "string",
-            "default": "https://api.xiaomimimo.com/v1"
-          },
-          "model": {
-            "description": "模型名称",
-            "type": "string",
-            "default": "mimo-v2.5-tts"
-          },
-          "voice": {
-            "description": "预置音色",
-            "type": "string",
-            "default": "mimo_default",
-            "options": ["mimo_default", "冰糖", "茉莉", "苏打", "白桦", "Mia", "Chloe", "Milo", "Dean"]
-          },
-          "format": {
-            "description": "输出音频格式",
-            "type": "string",
-            "default": "wav",
-            "options": ["wav", "pcm16"]
-          },
-          "style": {
-            "description": "风格标签（如：怅然、慵懒、磁性、东北话、唱歌）留空则不添加",
-            "type": "string",
-            "default": ""
-          },
-          "style_prompt": {
-            "description": "自然语言风格指令（放入 user message，如：用轻快上扬的语调）",
-            "type": "text",
-            "default": "",
-            "hint": "V2.5 支持自然语言控制风格，填写后会作为 user message 发送给模型"
-          },
-          "timeout": {
-            "description": "请求超时（秒）",
-            "type": "int",
-            "default": 60
-          }
+          "instance_name": { "description": "实例名称", "type": "string", "default": "mimo_v2.5" },
+          "api_key": { "description": "API Key", "type": "string", "default": "" },
+          "api_base": { "description": "API Base URL", "type": "string", "default": "https://api.xiaomimimo.com/v1" },
+          "model": { "description": "模型名称", "type": "string", "default": "mimo-v2.5-tts" },
+          "voice": { "description": "预置音色", "type": "string", "default": "mimo_default", "options": ["mimo_default", "冰糖", "茉莉", "苏打", "白桦", "Mia", "Chloe", "Milo", "Dean"] },
+          "format": { "description": "输出格式", "type": "string", "default": "wav", "options": ["wav", "pcm16"] },
+          "style": { "description": "风格标签（怅然、慵懒、磁性等）", "type": "string", "default": "" },
+          "style_prompt": { "description": "自然语言风格指令", "type": "text", "default": "", "hint": "如：用轻快上扬的语调" },
+          "timeout": { "description": "超时（秒）", "type": "int", "default": 60 }
         }
       },
       "mimo_v2_5_voicedesign": {
-        "name": "MiMo-V2.5-TTS-VoiceDesign（音色设计）",
-        "hint": "通过文本描述设计音色，无需音频样本",
+        "name": "[MiMo] V2.5-VoiceDesign（文本描述设计音色）",
         "items": {
-          "instance_name": {
-            "description": "实例名称",
-            "type": "string",
-            "default": "mimo_design"
-          },
-          "api_key": {
-            "description": "API Key",
-            "type": "string",
-            "default": ""
-          },
-          "api_base": {
-            "description": "API Base URL",
-            "type": "string",
-            "default": "https://api.xiaomimimo.com/v1"
-          },
-          "voice_description": {
-            "description": "音色描述文本",
-            "type": "text",
-            "default": "",
-            "hint": "描述你想要的音色，如：年轻女性，温柔治愈系，语速适中"
-          },
-          "format": {
-            "description": "输出音频格式",
-            "type": "string",
-            "default": "wav",
-            "options": ["wav", "pcm16"]
-          },
-          "optimize_text_preview": {
-            "description": "是否智能润色合成文本",
-            "type": "bool",
-            "default": false
-          },
-          "timeout": {
-            "description": "请求超时（秒）",
-            "type": "int",
-            "default": 60
-          }
+          "instance_name": { "description": "实例名称", "type": "string", "default": "mimo_design" },
+          "api_key": { "description": "API Key", "type": "string", "default": "" },
+          "api_base": { "description": "API Base URL", "type": "string", "default": "https://api.xiaomimimo.com/v1" },
+          "voice_description": { "description": "音色描述", "type": "text", "default": "", "hint": "如：年轻女性，温柔治愈系" },
+          "format": { "description": "输出格式", "type": "string", "default": "wav", "options": ["wav", "pcm16"] },
+          "optimize_text_preview": { "description": "智能润色文本", "type": "bool", "default": false },
+          "timeout": { "description": "超时（秒）", "type": "int", "default": 60 }
         }
       },
       "mimo_v2_5_voiceclone": {
-        "name": "MiMo-V2.5-TTS-VoiceClone（音色克隆）",
-        "hint": "基于音频样本复刻音色。请先在上方上传样本文件并命名，然后在下方填写要使用的样本名称。",
+        "name": "[MiMo] V2.5-VoiceClone（音频样本克隆）",
+        "hint": "请先在上方上传样本文件",
         "items": {
-          "instance_name": {
-            "description": "实例名称",
-            "type": "string",
-            "default": "mimo_clone"
-          },
-          "api_key": {
-            "description": "API Key",
-            "type": "string",
-            "default": ""
-          },
-          "api_base": {
-            "description": "API Base URL",
-            "type": "string",
-            "default": "https://api.xiaomimimo.com/v1"
-          },
-          "voice_sample_name": {
-            "description": "样本文件名称",
-            "type": "string",
-            "default": "",
-            "hint": "填写上方已上传的音频文件名，如：ZSJY-女声-说书-IndexTTS2.wav。留空则使用第一个文件。"
-          },
-          "format": {
-            "description": "输出音频格式",
-            "type": "string",
-            "default": "wav",
-            "options": ["wav", "pcm16"]
-          },
-          "style_prompt": {
-            "description": "自然语言风格指令（可选）",
-            "type": "text",
-            "default": ""
-          },
-          "timeout": {
-            "description": "请求超时（秒）",
-            "type": "int",
-            "default": 60
-          }
+          "instance_name": { "description": "实例名称", "type": "string", "default": "mimo_clone" },
+          "api_key": { "description": "API Key", "type": "string", "default": "" },
+          "api_base": { "description": "API Base URL", "type": "string", "default": "https://api.xiaomimimo.com/v1" },
+          "voice_sample_name": { "description": "样本文件名", "type": "string", "default": "", "hint": "留空则使用第一个" },
+          "format": { "description": "输出格式", "type": "string", "default": "wav", "options": ["wav", "pcm16"] },
+          "style_prompt": { "description": "风格指令（可选）", "type": "text", "default": "" },
+          "timeout": { "description": "超时（秒）", "type": "int", "default": 60 }
         }
       },
       "openai_compat": {
-        "name": "OpenAI 兼容 TTS",
-        "hint": "兼容 OpenAI /v1/audio/speech 接口的 TTS 服务",
+        "name": "[OpenAI] 兼容 TTS（/v1/audio/speech）",
         "items": {
-          "instance_name": {
-            "description": "实例名称",
-            "type": "string",
-            "default": "openai_tts"
-          },
-          "api_key": {
-            "description": "API Key",
-            "type": "string",
-            "default": ""
-          },
-          "api_base": {
-            "description": "API Base URL",
-            "type": "string",
-            "default": "https://api.openai.com/v1"
-          },
-          "model": {
-            "description": "模型名称",
-            "type": "string",
-            "default": "tts-1"
-          },
-          "voice": {
-            "description": "音色",
-            "type": "string",
-            "default": "alloy",
-            "options": ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
-          },
-          "speed": {
-            "description": "语速（0.25-4.0）",
-            "type": "float",
-            "default": 1.0
-          },
-          "format": {
-            "description": "输出音频格式",
-            "type": "string",
-            "default": "wav",
-            "options": ["mp3", "opus", "aac", "flac", "wav", "pcm"]
-          },
-          "timeout": {
-            "description": "请求超时（秒）",
-            "type": "int",
-            "default": 30
-          }
+          "instance_name": { "description": "实例名称", "type": "string", "default": "openai_tts" },
+          "api_key": { "description": "API Key", "type": "string", "default": "" },
+          "api_base": { "description": "API Base URL", "type": "string", "default": "https://api.openai.com/v1" },
+          "model": { "description": "模型", "type": "string", "default": "tts-1" },
+          "voice": { "description": "音色", "type": "string", "default": "alloy", "options": ["alloy", "echo", "fable", "onyx", "nova", "shimmer"] },
+          "speed": { "description": "语速（0.25-4.0）", "type": "float", "default": 1.0 },
+          "format": { "description": "输出格式", "type": "string", "default": "wav", "options": ["mp3", "opus", "aac", "flac", "wav", "pcm"] },
+          "timeout": { "description": "超时（秒）", "type": "int", "default": 30 }
+        }
+      },
+      "volcengine": {
+        "name": "[火山引擎] TTS（SAMI API）",
+        "hint": "需在火山引擎控制台获取 appkey 和 token",
+        "items": {
+          "instance_name": { "description": "实例名称", "type": "string", "default": "volcengine_tts" },
+          "app_id": { "description": "AppKey", "type": "string", "default": "" },
+          "access_token": { "description": "Access Token", "type": "string", "default": "" },
+          "voice_type": { "description": "发音人", "type": "string", "default": "zh_female_qingxin", "hint": "如 zh_female_qingxin、zh_male_chunhou" },
+          "speed_ratio": { "description": "语速（0.2-3.0）", "type": "float", "default": 1.0 },
+          "volume_ratio": { "description": "音量（0.1-3.0）", "type": "float", "default": 1.0 },
+          "format": { "description": "输出格式", "type": "string", "default": "mp3", "options": ["mp3", "wav", "ogg", "pcm"] },
+          "sample_rate": { "description": "采样率", "type": "int", "default": 24000 },
+          "timeout": { "description": "超时（秒）", "type": "int", "default": 30 }
+        }
+      },
+      "aliyun": {
+        "name": "[阿里云百炼] CosyVoice TTS",
+        "hint": "使用 DashScope OpenAI 兼容接口",
+        "items": {
+          "instance_name": { "description": "实例名称", "type": "string", "default": "aliyun_tts" },
+          "api_key": { "description": "API Key", "type": "string", "default": "" },
+          "api_base": { "description": "API Base URL", "type": "string", "default": "https://dashscope.aliyuncs.com/compatible-mode/v1" },
+          "model": { "description": "模型", "type": "string", "default": "cosyvoice-v1", "hint": "cosyvoice-v1, cosyvoice-v2" },
+          "voice": { "description": "音色", "type": "string", "default": "longxiaochun", "hint": "longxiaochun、longyue、longshu 等" },
+          "format": { "description": "输出格式", "type": "string", "default": "wav", "options": ["wav", "mp3", "pcm"] },
+          "volume": { "description": "音量（0-100）", "type": "int", "default": 50 },
+          "speech_rate": { "description": "语速（0.5-2.0）", "type": "float", "default": 1.0 },
+          "timeout": { "description": "超时（秒）", "type": "int", "default": 30 }
+        }
+      },
+      "azure": {
+        "name": "[Azure] Cognitive Services TTS",
+        "hint": "需在 Azure 门户创建语音服务资源",
+        "items": {
+          "instance_name": { "description": "实例名称", "type": "string", "default": "azure_tts" },
+          "subscription_key": { "description": "订阅密钥", "type": "string", "default": "" },
+          "region": { "description": "区域", "type": "string", "default": "", "hint": "eastasia、eastus 等" },
+          "voice_name": { "description": "音色", "type": "string", "default": "zh-CN-XiaoxiaoNeural" },
+          "output_format": { "description": "输出格式", "type": "string", "default": "audio-16khz-128kbitrate-mono-mp3" },
+          "style": { "description": "情感风格", "type": "string", "default": "", "hint": "cheerful、sad、gentle 等" },
+          "role": { "description": "角色扮演", "type": "string", "default": "" },
+          "timeout": { "description": "超时（秒）", "type": "int", "default": 60 }
+        }
+      },
+      "elevenlabs": {
+        "name": "[ElevenLabs] TTS",
+        "hint": "需在 ElevenLabs 获取 API Key 和 Voice ID",
+        "items": {
+          "instance_name": { "description": "实例名称", "type": "string", "default": "elevenlabs_tts" },
+          "api_key": { "description": "API Key", "type": "string", "default": "" },
+          "voice_id": { "description": "Voice ID", "type": "string", "default": "" },
+          "model_id": { "description": "模型", "type": "string", "default": "eleven_multilingual_v2" },
+          "stability": { "description": "稳定性（0-1）", "type": "float", "default": 0.5 },
+          "similarity_boost": { "description": "相似度（0-1）", "type": "float", "default": 0.75 },
+          "output_format": { "description": "输出格式", "type": "string", "default": "mp3_44100_128", "options": ["mp3_44100_128", "mp3_44100_192", "pcm_16000", "pcm_24000", "pcm_44100"] },
+          "timeout": { "description": "超时（秒）", "type": "int", "default": 30 }
+        }
+      },
+      "custom_http": {
+        "name": "[自定义] HTTP TTS（模板化接入任意 API）",
+        "hint": "占位符: ${TEXT}、${API_KEY}、${VOICE_SAMPLE_BASE64}、${VOICE_SAMPLE_BASE64_RAW}、${VOICE_SAMPLE_PATH}",
+        "items": {
+          "instance_name": { "description": "实例名称", "type": "string", "default": "custom_tts" },
+          "url": { "description": "请求 URL", "type": "string", "default": "https://api.example.com/v1/tts" },
+          "method": { "description": "HTTP 方法", "type": "string", "default": "POST", "options": ["GET", "POST"] },
+          "headers": { "description": "请求头（每行 Key: Value）", "type": "text", "default": "Authorization: Bearer ${API_KEY}\nContent-Type: application/json" },
+          "body_template": { "description": "请求体模板", "type": "text", "default": "{\"text\": \"${TEXT}\", \"voice\": \"default\"}" },
+          "body_format": { "description": "请求体格式", "type": "string", "default": "json", "options": ["json", "form"] },
+          "response_type": { "description": "响应类型", "type": "string", "default": "binary", "options": ["binary", "json"] },
+          "response_audio_path": { "description": "JSON 音频路径", "type": "string", "default": "", "hint": "如 choices.0.message.audio.data" },
+          "response_audio_encoding": { "description": "音频编码", "type": "string", "default": "raw", "options": ["raw", "base64"] },
+          "audio_format": { "description": "输出格式（扩展名）", "type": "string", "default": "wav" },
+          "api_key": { "description": "API Key", "type": "string", "default": "" },
+          "voice_sample_name": { "description": "音色样本文件名", "type": "string", "default": "" },
+          "timeout": { "description": "超时（秒）", "type": "int", "default": 30 }
         }
       }
     }

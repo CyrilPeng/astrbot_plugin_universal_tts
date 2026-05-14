@@ -4,7 +4,7 @@ import base64
 
 import httpx
 
-from .base import TTSEngine
+from ..base import TTSEngine
 
 
 class MiMoV25DesignEngine(TTSEngine):

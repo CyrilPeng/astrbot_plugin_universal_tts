@@ -1,17 +1,32 @@
 # 更新日志
 
+## v1.1.0
+
+### 新增引擎
+- **火山引擎 TTS**：基于 SAMI HTTP API，支持多种发音人和语速/音量调节
+- **阿里云百炼 CosyVoice TTS**：基于 DashScope OpenAI 兼容接口
+- **Azure Cognitive Services TTS**：支持 SSML、情感风格和角色扮演
+- **ElevenLabs TTS**：高质量多语言语音合成
+- **自定义 HTTP TTS**：模板化配置接入任意 HTTP TTS API，支持占位符替换和多种响应解析
+
+### 架构改造
+- 引擎代码按提供商重组为多级目录结构（mimo/、openai/、volcengine/、aliyun/、azure/、elevenlabs/、custom_http/）
+- 配置模板按 `[提供商] 模型` 格式分组，用户选择时一目了然
+- 提取公共路径解析和 base64 编码逻辑到基类，精简各引擎代码
+
+### 改进
+- 错误日志包含引擎名称和异常类型，便于定位问题
+- 配置字段精简，去除冗余描述
+
 ## v1.0.1
 
-- 优化音色克隆引擎：将音色样本配置从手动填写路径改为 WebUI 文件上传，用户无需关心服务器文件路径
+- 优化音色克隆引擎：将音色样本配置从手动填写路径改为 WebUI 文件上传
 - 支持 AstrBot v4.13.0+ 的 `file` 类型配置项
 
 ## v1.0.0
 
 - 初始版本
-- 支持 MiMo-V2-TTS（预置音色 + style 标签风格控制）
-- 支持 MiMo-V2.5-TTS（精品预置音色 + 自然语言风格控制）
-- 支持 MiMo-V2.5-TTS-VoiceDesign（文本描述设计音色）
-- 支持 MiMo-V2.5-TTS-VoiceClone（音频样本克隆音色）
+- 支持 MiMo-V2-TTS、MiMo-V2.5-TTS、VoiceDesign、VoiceClone
 - 支持 OpenAI 兼容 TTS 接口
-- 插件自动注册为 AstrBot TTS Provider，走官方 TTS 管道
+- 插件自动注册为 AstrBot TTS Provider
 - 支持运行时通过指令切换引擎

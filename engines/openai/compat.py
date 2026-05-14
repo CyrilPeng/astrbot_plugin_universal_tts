@@ -2,7 +2,7 @@
 
 import httpx
 
-from .base import TTSEngine
+from ..base import TTSEngine
 
 
 class OpenAICompatEngine(TTSEngine):

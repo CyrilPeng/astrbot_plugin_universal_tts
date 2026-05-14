@@ -9,15 +9,14 @@ from astrbot.api import logger, AstrBotConfig
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 
-from .engines import get_engine, ENGINE_REGISTRY
-from .engines.base import TTSEngine
+from .engines import get_engine, ENGINE_REGISTRY, TTSEngine
 
 
 @register(
     "astrbot_plugin_universal_tts",
     "某不科学的高数",
     "通用 TTS 插件，支持多引擎切换，通过钩子拦截实现 TTS",
-    "1.0.1",
+    "1.1.0",
 )
 class UniversalTTSPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -57,12 +56,15 @@ class UniversalTTSPlugin(Star):
             engine_config = engines_config[0]
 
         template_key = engine_config.get("__template_key", "")
-        instance_name = engine_config.get("instance_name", template_key)
+        instance_name = engine_config.get("instance_name", "").strip() or template_key
 
         try:
             self._engine = get_engine(engine_config, self.config)
         except Exception as e:
-            logger.error(f"[UniversalTTS] 创建引擎失败: {e}")
+            logger.error(
+                f"[UniversalTTS] 创建引擎失败 (类型: {template_key}, 实例: {instance_name}): "
+                f"{type(e).__name__}: {e}"
+            )
             return
 
         logger.info(f"[UniversalTTS] 已启用，使用引擎: {instance_name} (类型: {template_key})")
@@ -109,7 +111,10 @@ class UniversalTTSPlugin(Star):
             logger.debug(f"[UniversalTTS] 开始合成: {full_text[:50]}...")
             audio_bytes, fmt = await self._engine.synthesize(full_text)
         except Exception as e:
-            logger.error(f"[UniversalTTS] TTS 合成失败: {e}")
+            logger.error(
+                f"[UniversalTTS] TTS 合成失败 (引擎: {self._engine.instance_name}): "
+                f"{type(e).__name__}: {e}"
+            )
             return  # 合成失败不影响原消息发送
 
         # 保存音频文件
@@ -195,17 +200,8 @@ class UniversalTTSPlugin(Star):
     async def list_engines(self, event: AstrMessageEvent):
         """列出所有支持的 TTS 引擎类型"""
         lines = ["支持的 TTS 引擎类型："]
-        engine_descriptions = {
-            "mimo_v2": "MiMo-V2-TTS（预置音色 + style 标签）",
-            "mimo_v2_5": "MiMo-V2.5-TTS（精品音色 + 自然语言控制）",
-            "mimo_v2_5_voicedesign": "MiMo-V2.5-VoiceDesign（文本描述设计音色）",
-            "mimo_v2_5_voiceclone": "MiMo-V2.5-VoiceClone（音频样本克隆音色）",
-            "openai_compat": "OpenAI 兼容 TTS（/v1/audio/speech）",
-        }
         for key in ENGINE_REGISTRY:
-            desc = engine_descriptions.get(key, key)
-            lines.append(f"  • {key}: {desc}")
-
+            lines.append(f"  • {key}")
         yield event.plain_result("\n".join(lines))
 
     async def terminate(self):
