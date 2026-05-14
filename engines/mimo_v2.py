@@ -17,8 +17,8 @@ class MiMoV2Engine(TTSEngine):
     - user message 为可选，可用于影响语气
     """
 
-    def __init__(self, config: dict) -> None:
-        super().__init__(config)
+    def __init__(self, config: dict, plugin_config: dict | None = None) -> None:
+        super().__init__(config, plugin_config)
         self.api_key: str = config.get("api_key", "")
         self.api_base: str = config.get("api_base", "https://api.xiaomimimo.com/v1")
         self.model: str = config.get("model", "mimo-v2-tts")

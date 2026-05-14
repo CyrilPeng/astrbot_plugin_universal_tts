@@ -1,16 +1,29 @@
 {
   "enable": {
-    "description": "启用通用 TTS 插件（启用后将注册为 AstrBot TTS Provider）",
+    "description": "启用通用 TTS 插件",
     "type": "bool",
     "default": true,
     "obvious_hint": true,
-    "hint": "启用后插件会自动注入 TTS Provider，请在 AstrBot 设置中开启 TTS 并选择本插件提供的 Provider。"
+    "hint": "启用后插件会拦截 LLM 回复并自动转为语音发送。请关闭 AstrBot 内置 TTS 功能以避免冲突。"
   },
-  "set_as_default": {
-    "description": "自动设为默认 TTS Provider",
-    "type": "bool",
-    "default": true,
-    "hint": "启用后插件加载时会自动将自身设为当前使用的 TTS Provider，无需手动切换。"
+  "tts_probability": {
+    "description": "TTS 触发概率（%）",
+    "type": "int",
+    "default": 100,
+    "hint": "0-100，表示每条 LLM 回复转为语音的概率。100 表示始终转语音，0 表示不触发。"
+  },
+  "voice_clone_samples": {
+    "description": "音色克隆样本文件",
+    "type": "file",
+    "default": [],
+    "file_types": ["mp3", "wav"],
+    "hint": "上传用于音色克隆的音频样本（mp3/wav）。在 VoiceClone 引擎中填写文件名即可选用对应样本。"
+  },
+  "active_engine": {
+    "description": "当前生效的引擎实例名称",
+    "type": "string",
+    "default": "",
+    "hint": "填写下方引擎列表中某个实例的名称。留空则使用列表中的第一个。"
   },
   "engines": {
     "type": "template_list",
@@ -168,7 +181,7 @@
       },
       "mimo_v2_5_voiceclone": {
         "name": "MiMo-V2.5-TTS-VoiceClone（音色克隆）",
-        "hint": "基于音频样本复刻音色，支持 mp3/wav 格式",
+        "hint": "基于音频样本复刻音色。请先在上方上传样本文件并命名，然后在下方填写要使用的样本名称。",
         "items": {
           "instance_name": {
             "description": "实例名称",
@@ -185,11 +198,11 @@
             "type": "string",
             "default": "https://api.xiaomimimo.com/v1"
           },
-          "voice_sample_path": {
-            "description": "音色样本文件路径（mp3 或 wav）",
+          "voice_sample_name": {
+            "description": "样本文件名称",
             "type": "string",
             "default": "",
-            "hint": "填写服务器上音频文件的绝对路径"
+            "hint": "填写上方已上传的音频文件名，如：ZSJY-女声-说书-IndexTTS2.wav。留空则使用第一个文件。"
           },
           "format": {
             "description": "输出音频格式",

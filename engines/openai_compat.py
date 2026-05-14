@@ -14,8 +14,8 @@ class OpenAICompatEngine(TTSEngine):
     - 其他兼容 OpenAI 接口的 TTS 服务
     """
 
-    def __init__(self, config: dict) -> None:
-        super().__init__(config)
+    def __init__(self, config: dict, plugin_config: dict | None = None) -> None:
+        super().__init__(config, plugin_config)
         self.api_key: str = config.get("api_key", "")
         self.api_base: str = config.get("api_base", "https://api.openai.com/v1")
         self.model: str = config.get("model", "tts-1")

@@ -17,8 +17,8 @@ class MiMoV25DesignEngine(TTSEngine):
     - 可选 optimize_text_preview 参数智能润色文本
     """
 
-    def __init__(self, config: dict) -> None:
-        super().__init__(config)
+    def __init__(self, config: dict, plugin_config: dict | None = None) -> None:
+        super().__init__(config, plugin_config)
         self.api_key: str = config.get("api_key", "")
         self.api_base: str = config.get("api_base", "https://api.xiaomimimo.com/v1")
         self.voice_description: str = config.get("voice_description", "")

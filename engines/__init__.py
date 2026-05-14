@@ -17,11 +17,12 @@ ENGINE_REGISTRY: dict[str, type[TTSEngine]] = {
 }
 
 
-def get_engine(engine_config: dict) -> TTSEngine:
+def get_engine(engine_config: dict, plugin_config: dict | None = None) -> TTSEngine:
     """根据配置创建引擎实例
 
     Args:
         engine_config: 单个引擎的配置字典（来自 template_list 中的一项）
+        plugin_config: 插件顶层配置（用于读取 file 类型等顶层配置项）
 
     Returns:
         TTSEngine 实例
@@ -33,7 +34,7 @@ def get_engine(engine_config: dict) -> TTSEngine:
         raise ValueError(
             f"未知的 TTS 引擎类型: '{template_key}'，可用类型: {available}"
         )
-    return engine_cls(engine_config)
+    return engine_cls(engine_config, plugin_config or {})
 
 
 __all__ = [

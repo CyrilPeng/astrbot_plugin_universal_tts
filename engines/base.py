@@ -6,8 +6,9 @@ from abc import ABC, abstractmethod
 class TTSEngine(ABC):
     """所有 TTS 引擎的抽象基类"""
 
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict, plugin_config: dict | None = None) -> None:
         self.config = config
+        self.plugin_config = plugin_config or {}
         self.instance_name: str = config.get("instance_name", "unnamed")
 
     @abstractmethod
