@@ -69,11 +69,11 @@ https://github.com/CyrilPeng/astrbot_plugin_universal_tts
 
 | 指令 | 说明 |
 |------|------|
-| `/tts_test [文本]` | 测试当前引擎合成效果 |
-| `/tts_engines` | 列出所有已配置引擎（序号 + 实例名） |
-| `/tts_switch` | 查看引擎列表及当前使用的引擎 |
-| `/tts_switch <序号>` | 按序号快速切换，如 `/tts_switch 2` |
-| `/tts_switch <实例名>` | 按实例名切换 |
+| `/tts_test [文本]` | 测试当前会话引擎的合成效果 |
+| `/tts_engines` | 列出所有已配置引擎（标注全局/本会话状态） |
+| `/tts_switch <序号>` | 切换全局默认引擎 |
+| `/tts_bind <序号>` | 为当前群聊/私聊绑定专属引擎 |
+| `/tts_unbind` | 解除当前会话的绑定，回退全局 |
 
 ---
 
