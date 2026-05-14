@@ -21,6 +21,7 @@ class MiMoV25DesignEngine(TTSEngine):
         super().__init__(config, plugin_config)
         self.api_key: str = config.get("api_key", "")
         self.api_base: str = config.get("api_base", "https://api.xiaomimimo.com/v1")
+        self.model: str = config.get("model", "mimo-v2.5-tts-voicedesign")
         self.voice_description: str = config.get("voice_description", "")
         self.audio_format: str = config.get("format", "wav")
         self.optimize_text_preview: bool = config.get("optimize_text_preview", False)
@@ -45,7 +46,7 @@ class MiMoV25DesignEngine(TTSEngine):
         messages.append({"role": "assistant", "content": text})
 
         payload: dict = {
-            "model": "mimo-v2.5-tts-voicedesign",
+            "model": self.model,
             "messages": messages,
             "audio": {
                 "format": self.audio_format,

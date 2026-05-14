@@ -9,14 +9,20 @@ from astrbot.api import logger, AstrBotConfig
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 
-from .engines import get_engine, ENGINE_REGISTRY, TTSEngine
+from .engines import get_engine, TTSEngine
+
+
+def _is_slash(event: AstrMessageEvent) -> bool:
+    """判断原始消息是否以斜杠开头（强制要求斜杠指令）"""
+    raw = getattr(event.message_obj, "message_str", "") or ""
+    return raw.lstrip().startswith("/")
 
 
 @register(
     "astrbot_plugin_universal_tts",
     "某不科学的高数",
     "通用 TTS 插件，支持多引擎切换，通过钩子拦截实现 TTS",
-    "1.1.0",
+    "1.1.1",
 )
 class UniversalTTSPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -125,40 +131,52 @@ class UniversalTTSPlugin(Star):
         # 替换消息链为语音
         result.chain = [Comp.Record(file=str(audio_path), url=str(audio_path))]
 
+    def _list_engines(self) -> list[dict]:
+        """获取已配置的引擎列表"""
+        return self.config.get("engines", []) or []
+
+    def _format_instance(self, idx: int, ec: dict) -> str:
+        """格式化引擎条目: '1. 实例名 (类型) ← 当前'"""
+        name = (ec.get("instance_name") or "").strip() or ec.get("__template_key", "unknown")
+        ttype = ec.get("__template_key", "")
+        marker = " ← 当前" if self._engine and self._engine.instance_name == name else ""
+        return f"  {idx}. {name} ({ttype}){marker}"
+
     @filter.command("tts_switch")
     async def switch_engine(self, event: AstrMessageEvent):
-        """切换 TTS 引擎。用法: /tts_switch <引擎实例名>"""
+        """切换 TTS 引擎。用法: /tts_switch <序号或实例名>"""
+        if not _is_slash(event):
+            return
         args = event.message_str.strip()
+        engines_config = self._list_engines()
+
         if not args:
-            engines_config: list[dict] = self.config.get("engines", [])
             if not engines_config:
                 yield event.plain_result("未配置任何 TTS 引擎")
                 return
-
             lines = ["当前配置的 TTS 引擎："]
-            for i, ec in enumerate(engines_config):
-                name = ec.get("instance_name", ec.get("__template_key", "unknown"))
-                ttype = ec.get("__template_key", "")
-                marker = ""
-                if self._engine and self._engine.instance_name == name:
-                    marker = " ← 当前"
-                lines.append(f"  {i + 1}. {name} ({ttype}){marker}")
-
-            lines.append("\n用法: /tts_switch <实例名>")
+            for i, ec in enumerate(engines_config, 1):
+                lines.append(self._format_instance(i, ec))
+            lines.append("\n用法: /tts_switch <序号或实例名>")
             yield event.plain_result("\n".join(lines))
             return
 
-        # 查找目标引擎
-        engines_config = self.config.get("engines", [])
+        # 优先按序号匹配
         target_config = None
-        for ec in engines_config:
-            if ec.get("instance_name", "") == args:
-                target_config = ec
-                break
+        if args.isdigit():
+            idx = int(args)
+            if 1 <= idx <= len(engines_config):
+                target_config = engines_config[idx - 1]
+        # 再按实例名匹配
+        if target_config is None:
+            for ec in engines_config:
+                if (ec.get("instance_name") or "").strip() == args:
+                    target_config = ec
+                    break
 
         if target_config is None:
             yield event.plain_result(
-                f"未找到名为 '{args}' 的引擎。使用 /tts_switch 查看可用引擎。"
+                f"未找到 '{args}' 对应的引擎。使用 /tts_switch 查看可用列表。"
             )
             return
 
@@ -171,15 +189,16 @@ class UniversalTTSPlugin(Star):
         if self._engine:
             await self._engine.close()
         self._engine = new_engine
-        logger.info(f"[UniversalTTS] 已切换引擎: {args}")
-        yield event.plain_result(f"已切换 TTS 引擎为: {args}")
+        name = self._engine.instance_name
+        logger.info(f"[UniversalTTS] 已切换引擎: {name}")
+        yield event.plain_result(f"已切换 TTS 引擎为: {name}")
 
     @filter.command("tts_test")
     async def test_tts(self, event: AstrMessageEvent):
         """测试 TTS 合成。用法: /tts_test <文本>"""
-        text = event.message_str.strip()
-        if not text:
-            text = "你好，这是一条 TTS 测试消息。"
+        if not _is_slash(event):
+            return
+        text = event.message_str.strip() or "你好，这是一条 TTS 测试消息。"
 
         if not self._engine:
             yield event.plain_result("TTS 引擎未初始化，请检查插件配置")
@@ -198,10 +217,17 @@ class UniversalTTSPlugin(Star):
 
     @filter.command("tts_engines")
     async def list_engines(self, event: AstrMessageEvent):
-        """列出所有支持的 TTS 引擎类型"""
-        lines = ["支持的 TTS 引擎类型："]
-        for key in ENGINE_REGISTRY:
-            lines.append(f"  • {key}")
+        """列出所有已配置的 TTS 引擎实例"""
+        if not _is_slash(event):
+            return
+        engines_config = self._list_engines()
+        if not engines_config:
+            yield event.plain_result("未配置任何 TTS 引擎")
+            return
+        lines = ["已配置的 TTS 引擎实例："]
+        for i, ec in enumerate(engines_config, 1):
+            lines.append(self._format_instance(i, ec))
+        lines.append("\n使用 /tts_switch <序号> 快速切换")
         yield event.plain_result("\n".join(lines))
 
     async def terminate(self):

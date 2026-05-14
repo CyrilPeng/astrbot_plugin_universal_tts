@@ -14,6 +14,7 @@ class MiMoV25CloneEngine(TTSEngine):
         super().__init__(config, plugin_config)
         self.api_key: str = config.get("api_key", "")
         self.api_base: str = config.get("api_base", "https://api.xiaomimimo.com/v1")
+        self.model: str = config.get("model", "mimo-v2.5-tts-voiceclone")
         self.audio_format: str = config.get("format", "wav")
         self.style_prompt: str = config.get("style_prompt", "")
         self.timeout: int = config.get("timeout", 60)
@@ -42,7 +43,7 @@ class MiMoV25CloneEngine(TTSEngine):
         messages.append({"role": "assistant", "content": text})
 
         payload = {
-            "model": "mimo-v2.5-tts-voiceclone",
+            "model": self.model,
             "messages": messages,
             "audio": {"format": self.audio_format, "voice": self._get_voice_base64()},
         }

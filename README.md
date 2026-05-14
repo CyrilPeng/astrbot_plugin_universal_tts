@@ -1,119 +1,147 @@
-# astrbot_plugin_universal_tts
+<div align="center">
 
-通用 TTS 插件 for [AstrBot](https://github.com/AstrBotDevs/AstrBot)。
+<img src="resources/logo.svg" width="180" alt="Universal TTS Logo" />
 
-支持多种 TTS 引擎，直接注册为 AstrBot TTS Provider，完全走官方 TTS 管道（触发概率、双输出等设置均生效）。
+# Universal TTS / 通用 TTS
 
-## 特性
+**让每一条消息都能听见**
 
-- **多引擎支持**：MiMo V2/V2.5、OpenAI 兼容、火山引擎、阿里云百炼、Azure、ElevenLabs、自定义 HTTP
-- **无缝集成**：注册为 AstrBot TTS Provider，无需修改 AstrBot 配置
-- **热切换**：通过指令在运行时切换不同引擎
-- **WebUI 配置**：所有参数均可在 AstrBot 管理面板中可视化配置
-- **自定义 HTTP**：通过模板化配置接入任意 HTTP TTS API，无需编写代码
+[![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-blue?style=flat-square)](https://github.com/AstrBotDevs/AstrBot)
+[![License](https://img.shields.io/badge/License-AGPL--3.0-green?style=flat-square)](LICENSE)
+[![Version](https://img.shields.io/badge/Version-1.1.0-orange?style=flat-square)]()
 
-## 安装
+一个为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 打造的通用语音合成插件。
+支持多种引擎，覆盖国内外主流 TTS 服务，还能自定义接入任意 HTTP API。
 
-在 AstrBot 管理面板中通过仓库地址安装：
+</div>
+
+---
+
+## ✨ 亮点
+
+- 🎯 **即插即用** — 自动接管 AstrBot TTS 管道，零配置冲突
+- 🔄 **热切换** — 运行时可一条指令切换引擎，无需手动进入后台重启
+- 🌍 **多引擎覆盖** — MiMo · OpenAI · 火山引擎 · 阿里云 · Azure · ElevenLabs
+- 🛠️ **万能适配** — 自定义 HTTP 引擎，模板化接入任何 TTS API
+- 🎨 **WebUI 配置** — 所有参数可视化，所见即所得
+
+---
+
+## 📦 支持的引擎
+
+| 提供商 | 引擎 | 特点 |
+|--------|------|------|
+| **MiMo** | V2-TTS | 预置音色 + `<style>` 标签风格控制 |
+| **MiMo** | V2.5-TTS | 精品音色 + 自然语言风格控制 |
+| **MiMo** | V2.5-VoiceDesign | 文本描述生成音色 |
+| **MiMo** | V2.5-VoiceClone | 音频样本克隆任意音色 |
+| **OpenAI** | 兼容 TTS | `/v1/audio/speech` 标准接口 |
+| **火山引擎** | SAMI TTS | 字节跳动，丰富发音人 |
+| **阿里云百炼** | CosyVoice | DashScope 兼容接口 |
+| **Azure** | Cognitive Services | SSML + 情感风格 + 角色扮演 |
+| **ElevenLabs** | Text-to-Speech | 多语言高保真语音 |
+| **自定义** | HTTP TTS | 模板化接入任意 API |
+
+---
+
+## 🚀 安装
+
+在 AstrBot 管理面板 → 插件市场，通过仓库地址安装：
 
 ```
 https://github.com/CyrilPeng/astrbot_plugin_universal_tts
 ```
 
-## 配置
+## ⚙️ 配置
 
-安装后在插件配置页面：
+1. 进入插件配置页
+2. 点击「TTS 引擎配置列表」添加引擎（按 `[提供商]` 分组）
+3. 填写 API Key 和参数
+4. 确保 AstrBot 的 TTS 功能已开启
 
-1. 在「TTS 引擎配置列表」中添加引擎实例
-2. 填写对应的 API Key、音色等参数
-3. 确保 AstrBot 设置中 TTS 功能已开启
+> 💡 引擎列表中第一个为默认引擎，也可通过「当前生效的引擎实例名称」指定。
 
-插件会自动将自身设为默认 TTS Provider。
+---
 
-## 支持的引擎
+## 🎮 指令
 
-| 引擎类型 | 说明 |
-|---------|------|
-| MiMo-V2-TTS | 小米 MiMo V2，支持预置音色和 `<style>` 标签风格控制 |
-| MiMo-V2.5-TTS | 小米 MiMo V2.5，支持精品音色和自然语言风格控制 |
-| MiMo-V2.5-VoiceDesign | 通过文本描述设计音色，无需音频样本 |
-| MiMo-V2.5-VoiceClone | 基于音频样本复刻任意音色 |
-| OpenAI 兼容 TTS | 兼容 OpenAI `/v1/audio/speech` 接口的服务 |
-| 火山引擎 TTS | 字节跳动火山引擎 SAMI HTTP API |
-| 阿里云百炼 TTS | 阿里云百炼 CosyVoice，DashScope 兼容接口 |
-| Azure TTS | 微软 Azure Cognitive Services 语音服务 |
-| ElevenLabs TTS | ElevenLabs 高质量多语言语音合成 |
-| 自定义 HTTP TTS | 模板化配置接入任意 HTTP TTS API |
-
-## 自定义 HTTP 引擎
-
-自定义 HTTP 引擎允许你通过模板化配置接入任何 HTTP TTS API，无需编写代码。
-
-### 占位符
-
-| 占位符 | 说明 |
-|--------|------|
-| `${TEXT}` | 待合成的文本（LLM 回复内容） |
-| `${API_KEY}` | 用户配置的 API 密钥 |
-| `${VOICE_SAMPLE_BASE64}` | 音色样本 base64 编码（含 data URI 前缀） |
-| `${VOICE_SAMPLE_BASE64_RAW}` | 音色样本纯 base64 编码 |
-| `${VOICE_SAMPLE_PATH}` | 音色样本文件路径 |
-
-### 配置示例
-
-**接入返回二进制音频的 API：**
-```
-URL: https://api.example.com/v1/tts
-Method: POST
-Headers: Authorization: Bearer ${API_KEY}
-Body: {"text": "${TEXT}", "voice": "alloy"}
-Response Type: binary
-Audio Format: mp3
-```
-
-**接入返回 JSON 中 base64 音频的 API：**
-```
-URL: https://api.example.com/v1/chat/completions
-Method: POST
-Headers: api-key: ${API_KEY}
-Body: {"model": "tts-model", "messages": [{"role": "assistant", "content": "${TEXT}"}]}
-Response Type: json
-Response Audio Path: choices.0.message.audio.data
-Response Audio Encoding: base64
-Audio Format: wav
-```
-
-## 指令
+所有指令必须以 `/` 开头。
 
 | 指令 | 说明 |
 |------|------|
-| `/tts_test [文本]` | 测试 TTS 合成 |
-| `/tts_switch` | 查看已配置的引擎列表 |
-| `/tts_switch <实例名>` | 切换到指定引擎 |
-| `/tts_engines` | 列出所有支持的引擎类型 |
+| `/tts_test [文本]` | 测试当前引擎合成效果 |
+| `/tts_engines` | 列出所有已配置引擎（序号 + 实例名） |
+| `/tts_switch` | 查看引擎列表及当前使用的引擎 |
+| `/tts_switch <序号>` | 按序号快速切换，如 `/tts_switch 2` |
+| `/tts_switch <实例名>` | 按实例名切换 |
 
-## 工作原理
+---
 
-插件在加载时：
-1. 根据配置创建 TTS 引擎实例
-2. 动态创建继承 `TTSProvider` 的 Provider 类
-3. 将 Provider 实例注入 AstrBot 的 `ProviderManager`
-4. 设为默认 TTS Provider
+## 🛠️ 自定义 HTTP 引擎
 
-之后所有 TTS 触发逻辑（概率、会话控制、dual_output 等）完全走 AstrBot 官方管道，只是底层合成由本插件的引擎完成。
+不在预置列表里的 TTS 服务？用模板化配置搞定。
 
-## 扩展新引擎
+### 占位符
 
-1. 在 `engines/` 目录下新建提供商子目录（如 `engines/newprovider/`）
-2. 创建引擎类，继承 `TTSEngine`，实现 `synthesize(text) -> (bytes, format)` 方法
-3. 在子目录的 `__init__.py` 中导出引擎类
-4. 在 `engines/__init__.py` 中导入并注册到 `ENGINE_REGISTRY`
-5. 在 `_conf_schema.json` 的 `templates` 中添加对应配置模板
+| 占位符 | 含义 |
+|--------|------|
+| `${TEXT}` | 待合成文本 |
+| `${API_KEY}` | 你配置的密钥 |
+| `${VOICE_SAMPLE_BASE64}` | 音色样本 base64（含 data URI） |
+| `${VOICE_SAMPLE_BASE64_RAW}` | 音色样本纯 base64 |
+| `${VOICE_SAMPLE_PATH}` | 音色样本文件路径 |
 
-## 依赖
+### 示例：接入返回二进制音频的 API
 
-- httpx >= 0.27.0
+```
+URL:      https://api.example.com/v1/tts
+Method:   POST
+Headers:  Authorization: Bearer ${API_KEY}
+Body:     {"text": "${TEXT}", "voice": "alloy"}
+响应类型:  binary
+音频格式:  mp3
+```
 
-## 许可
+### 示例：接入返回 JSON + base64 的 API
 
-MIT
+```
+URL:      https://api.example.com/v1/chat/completions
+Method:   POST
+Headers:  api-key: ${API_KEY}
+Body:     {"model": "tts", "messages": [{"role": "assistant", "content": "${TEXT}"}]}
+响应类型:  json
+音频路径:  choices.0.message.audio.data
+音频编码:  base64
+音频格式:  wav
+```
+
+---
+
+## 🧩 开发者：扩展新引擎
+
+```
+engines/
+├── your_provider/
+│   ├── __init__.py      # 导出引擎类
+│   └── engine.py        # 继承 TTSEngine，实现 synthesize()
+└── __init__.py           # 在 ENGINE_REGISTRY 中注册
+```
+
+三步完成：
+1. 新建 `engines/your_provider/`，实现 `synthesize(text) -> (bytes, format)`
+2. 在 `engines/__init__.py` 中导入并注册
+3. 在 `_conf_schema.json` 中添加配置模板
+
+---
+
+## 📄 许可证
+
+本项目基于 [AGPL-3.0](LICENSE) 协议开源。
+
+---
+
+<div align="center">
+
+**Made with ❤️ for AstrBot**
+
+</div>

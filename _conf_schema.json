@@ -23,7 +23,7 @@
     "description": "当前生效的引擎实例名称",
     "type": "string",
     "default": "",
-    "hint": "填写下方引擎列表中某个实例的名称。留空则使用第一个。"
+    "hint": "填写下方引擎列表中某个实例的名称，或使用 /tts_switch 序号切换。留空则使用第一个。"
   },
   "engines": {
     "type": "template_list",
@@ -31,8 +31,9 @@
     "templates": {
       "mimo_v2": {
         "name": "[MiMo] V2-TTS（预置音色 + style 标签）",
+        "hint": "小米 MiMo V2 语音合成",
         "items": {
-          "instance_name": { "description": "实例名称", "type": "string", "default": "mimo_v2" },
+          "instance_name": { "description": "实例名称（用于标识和切换）", "type": "string", "default": "mimo_v2" },
           "api_key": { "description": "API Key", "type": "string", "default": "" },
           "api_base": { "description": "API Base URL", "type": "string", "default": "https://api.xiaomimimo.com/v1" },
           "model": { "description": "模型名称", "type": "string", "default": "mimo-v2-tts" },
@@ -45,8 +46,9 @@
       },
       "mimo_v2_5": {
         "name": "[MiMo] V2.5-TTS（精品音色 + 自然语言控制）",
+        "hint": "小米 MiMo V2.5 语音合成",
         "items": {
-          "instance_name": { "description": "实例名称", "type": "string", "default": "mimo_v2.5" },
+          "instance_name": { "description": "实例名称（用于标识和切换）", "type": "string", "default": "mimo_v2.5" },
           "api_key": { "description": "API Key", "type": "string", "default": "" },
           "api_base": { "description": "API Base URL", "type": "string", "default": "https://api.xiaomimimo.com/v1" },
           "model": { "description": "模型名称", "type": "string", "default": "mimo-v2.5-tts" },
@@ -59,10 +61,12 @@
       },
       "mimo_v2_5_voicedesign": {
         "name": "[MiMo] V2.5-VoiceDesign（文本描述设计音色）",
+        "hint": "通过文本描述设计音色，无需音频样本",
         "items": {
-          "instance_name": { "description": "实例名称", "type": "string", "default": "mimo_design" },
+          "instance_name": { "description": "实例名称（用于标识和切换）", "type": "string", "default": "mimo_design" },
           "api_key": { "description": "API Key", "type": "string", "default": "" },
           "api_base": { "description": "API Base URL", "type": "string", "default": "https://api.xiaomimimo.com/v1" },
+          "model": { "description": "模型名称", "type": "string", "default": "mimo-v2.5-tts-voicedesign", "hint": "厂商若更新模型名可在此修改，重置恢复默认" },
           "voice_description": { "description": "音色描述", "type": "text", "default": "", "hint": "如：年轻女性，温柔治愈系" },
           "format": { "description": "输出格式", "type": "string", "default": "wav", "options": ["wav", "pcm16"] },
           "optimize_text_preview": { "description": "智能润色文本", "type": "bool", "default": false },
@@ -73,9 +77,10 @@
         "name": "[MiMo] V2.5-VoiceClone（音频样本克隆）",
         "hint": "请先在上方上传样本文件",
         "items": {
-          "instance_name": { "description": "实例名称", "type": "string", "default": "mimo_clone" },
+          "instance_name": { "description": "实例名称（用于标识和切换）", "type": "string", "default": "mimo_clone" },
           "api_key": { "description": "API Key", "type": "string", "default": "" },
           "api_base": { "description": "API Base URL", "type": "string", "default": "https://api.xiaomimimo.com/v1" },
+          "model": { "description": "模型名称", "type": "string", "default": "mimo-v2.5-tts-voiceclone", "hint": "厂商若更新模型名可在此修改，重置恢复默认" },
           "voice_sample_name": { "description": "样本文件名", "type": "string", "default": "", "hint": "留空则使用第一个" },
           "format": { "description": "输出格式", "type": "string", "default": "wav", "options": ["wav", "pcm16"] },
           "style_prompt": { "description": "风格指令（可选）", "type": "text", "default": "" },
@@ -84,8 +89,9 @@
       },
       "openai_compat": {
         "name": "[OpenAI] 兼容 TTS（/v1/audio/speech）",
+        "hint": "兼容 OpenAI 接口的 TTS 服务",
         "items": {
-          "instance_name": { "description": "实例名称", "type": "string", "default": "openai_tts" },
+          "instance_name": { "description": "实例名称（用于标识和切换）", "type": "string", "default": "openai_tts" },
           "api_key": { "description": "API Key", "type": "string", "default": "" },
           "api_base": { "description": "API Base URL", "type": "string", "default": "https://api.openai.com/v1" },
           "model": { "description": "模型", "type": "string", "default": "tts-1" },
@@ -99,7 +105,7 @@
         "name": "[火山引擎] TTS（SAMI API）",
         "hint": "需在火山引擎控制台获取 appkey 和 token",
         "items": {
-          "instance_name": { "description": "实例名称", "type": "string", "default": "volcengine_tts" },
+          "instance_name": { "description": "实例名称（用于标识和切换）", "type": "string", "default": "volcengine_tts" },
           "app_id": { "description": "AppKey", "type": "string", "default": "" },
           "access_token": { "description": "Access Token", "type": "string", "default": "" },
           "voice_type": { "description": "发音人", "type": "string", "default": "zh_female_qingxin", "hint": "如 zh_female_qingxin、zh_male_chunhou" },
@@ -114,7 +120,7 @@
         "name": "[阿里云百炼] CosyVoice TTS",
         "hint": "使用 DashScope OpenAI 兼容接口",
         "items": {
-          "instance_name": { "description": "实例名称", "type": "string", "default": "aliyun_tts" },
+          "instance_name": { "description": "实例名称（用于标识和切换）", "type": "string", "default": "aliyun_tts" },
           "api_key": { "description": "API Key", "type": "string", "default": "" },
           "api_base": { "description": "API Base URL", "type": "string", "default": "https://dashscope.aliyuncs.com/compatible-mode/v1" },
           "model": { "description": "模型", "type": "string", "default": "cosyvoice-v1", "hint": "cosyvoice-v1, cosyvoice-v2" },
@@ -129,7 +135,7 @@
         "name": "[Azure] Cognitive Services TTS",
         "hint": "需在 Azure 门户创建语音服务资源",
         "items": {
-          "instance_name": { "description": "实例名称", "type": "string", "default": "azure_tts" },
+          "instance_name": { "description": "实例名称（用于标识和切换）", "type": "string", "default": "azure_tts" },
           "subscription_key": { "description": "订阅密钥", "type": "string", "default": "" },
           "region": { "description": "区域", "type": "string", "default": "", "hint": "eastasia、eastus 等" },
           "voice_name": { "description": "音色", "type": "string", "default": "zh-CN-XiaoxiaoNeural" },
@@ -140,10 +146,10 @@
         }
       },
       "elevenlabs": {
-        "name": "[ElevenLabs] TTS",
+        "name": "[ElevenLabs] TTS（多语言高质量语音）",
         "hint": "需在 ElevenLabs 获取 API Key 和 Voice ID",
         "items": {
-          "instance_name": { "description": "实例名称", "type": "string", "default": "elevenlabs_tts" },
+          "instance_name": { "description": "实例名称（用于标识和切换）", "type": "string", "default": "elevenlabs_tts" },
           "api_key": { "description": "API Key", "type": "string", "default": "" },
           "voice_id": { "description": "Voice ID", "type": "string", "default": "" },
           "model_id": { "description": "模型", "type": "string", "default": "eleven_multilingual_v2" },
@@ -157,7 +163,7 @@
         "name": "[自定义] HTTP TTS（模板化接入任意 API）",
         "hint": "占位符: ${TEXT}、${API_KEY}、${VOICE_SAMPLE_BASE64}、${VOICE_SAMPLE_BASE64_RAW}、${VOICE_SAMPLE_PATH}",
         "items": {
-          "instance_name": { "description": "实例名称", "type": "string", "default": "custom_tts" },
+          "instance_name": { "description": "实例名称（用于标识和切换）", "type": "string", "default": "custom_tts" },
           "url": { "description": "请求 URL", "type": "string", "default": "https://api.example.com/v1/tts" },
           "method": { "description": "HTTP 方法", "type": "string", "default": "POST", "options": ["GET", "POST"] },
           "headers": { "description": "请求头（每行 Key: Value）", "type": "text", "default": "Authorization: Bearer ${API_KEY}\nContent-Type: application/json" },

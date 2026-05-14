@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="100%" height="100%">
+  <defs>
+    <!-- 背景深空渐变色 -->
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#12132D" />
+      <stop offset="50%" stop-color="#2D1B4E" />
+      <stop offset="100%" stop-color="#0F4C81" />
+    </linearGradient>
+    
+    <!-- 声波与高光渐变色 -->
+    <linearGradient id="waveGradient" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#00F0FF" />
+      <stop offset="100%" stop-color="#00FFA3" />
+    </linearGradient>
+
+    <!-- 气泡投影效果 -->
+    <filter id="shadow" x="-10%" y="-10%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+
+  <!-- 1. 圆角背景 -->
+  <rect width="400" height="400" rx="80" fill="url(#bgGradient)" />
+
+  <!-- 2. Universal 环绕轨道 -->
+  <g stroke="rgba(255,255,255,0.15)" stroke-width="2" fill="none">
+    <ellipse cx="200" cy="160" rx="140" ry="50" transform="rotate(25 200 160)" />
+    <ellipse cx="200" cy="160" rx="140" ry="50" transform="rotate(-25 200 160)" />
+  </g>
+
+  <!-- 轨道上的发光星标 -->
+  <circle cx="75" cy="100" r="4" fill="#00FFA3" opacity="0.8" />
+  <circle cx="325" cy="220" r="3" fill="#00C9FF" opacity="0.8" />
+  
+  <!-- 装饰性星星 -->
+  <path d="M 330 90 Q 330 80 320 80 Q 330 80 330 70 Q 330 80 340 80 Q 330 80 330 90" fill="#FFF" opacity="0.6" />
+  <path d="M 80 230 Q 80 225 75 225 Q 80 225 80 220 Q 80 225 85 225 Q 80 225 80 230" fill="#FFF" opacity="0.4" />
+
+  <!-- 3. 对话气泡主体 (代表 Text) -->
+  <path d="M100,160 C100,110 145,70 200,70 C255,70 300,110 300,160 C300,210 255,250 200,250 C180,250 160,245 145,235 L105,250 L115,215 C105,200 100,180 100,160 Z" 
+        fill="rgba(255,255,255,0.06)" 
+        stroke="rgba(255,255,255,0.9)" 
+        stroke-width="5" 
+        stroke-linejoin="round" 
+        filter="url(#shadow)" />
+
+  <!-- 4. 动态声波柱 (代表 Speech / TTS) -->
+  <!-- 左一 -->
+  <rect x="134" y="140" width="12" height="40" rx="6" fill="url(#waveGradient)">
+    <animate attributeName="height" values="40; 60; 40" dur="0.9s" repeatCount="indefinite" />
+    <animate attributeName="y" values="140; 130; 140" dur="0.9s" repeatCount="indefinite" />
+  </rect>
+  
+  <!-- 左二 -->
+  <rect x="164" y="125" width="12" height="70" rx="6" fill="url(#waveGradient)">
+    <animate attributeName="height" values="70; 40; 70" dur="1.2s" repeatCount="indefinite" />
+    <animate attributeName="y" values="125; 140; 125" dur="1.2s" repeatCount="indefinite" />
+  </rect>
+  
+  <!-- 中间 (最高) -->
+  <rect x="194" y="110" width="12" height="100" rx="6" fill="url(#waveGradient)">
+    <animate attributeName="height" values="100; 50; 100" dur="0.75s" repeatCount="indefinite" />
+    <animate attributeName="y" values="110; 135; 110" dur="0.75s" repeatCount="indefinite" />
+  </rect>
+  
+  <!-- 右二 -->
+  <rect x="224" y="130" width="12" height="60" rx="6" fill="url(#waveGradient)">
+    <animate attributeName="height" values="60; 90; 60" dur="1.1s" repeatCount="indefinite" />
+    <animate attributeName="y" values="130; 115; 130" dur="1.1s" repeatCount="indefinite" />
+  </rect>
+  
+  <!-- 右一 -->
+  <rect x="254" y="145" width="12" height="30" rx="6" fill="url(#waveGradient)">
+    <animate attributeName="height" values="30; 55; 30" dur="1.3s" repeatCount="indefinite" />
+    <animate attributeName="y" values="145; 132.5; 145" dur="1.3s" repeatCount="indefinite" />
+  </rect>
+
+  <!-- 5. 底部品牌文字 -->
+  <text x="200" y="315" 
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" 
+        font-weight="800" 
+        font-size="28" 
+        fill="#FFFFFF" 
+        text-anchor="middle" 
+        letter-spacing="3">
+    UNIVERSAL TTS
+  </text>
+  
+  <text x="200" y="345" 
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" 
+        font-weight="600" 
+        font-size="14" 
+        fill="#00FFA3" 
+        text-anchor="middle" 
+        letter-spacing="6">
+    ASTRBOT PLUGIN
+  </text>
+</svg>
