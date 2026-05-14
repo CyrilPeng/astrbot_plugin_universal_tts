@@ -8,7 +8,7 @@
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-blue?style=flat-square)](https://github.com/AstrBotDevs/AstrBot)
 [![License](https://img.shields.io/badge/License-AGPL--3.0-green?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.1.0-orange?style=flat-square)]()
+[![Version](https://img.shields.io/badge/Version-1.2.1-orange?style=flat-square)]()
 
 一个为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 打造的通用语音合成插件。
 支持多种引擎，覆盖国内外主流 TTS 服务，还能自定义接入任意 HTTP API。
@@ -71,9 +71,22 @@ https://github.com/CyrilPeng/astrbot_plugin_universal_tts
 |------|------|
 | `/tts_test [文本]` | 测试当前会话引擎的合成效果 |
 | `/tts_engines` | 列出所有已配置引擎（标注全局/本会话状态） |
-| `/tts_switch <序号>` | 切换全局默认引擎 |
 | `/tts_bind <序号>` | 为当前群聊/私聊绑定专属引擎 |
 | `/tts_unbind` | 解除当前会话的绑定，回退全局 |
+| `/tts_switch <序号>` | 切换全局默认引擎（管理员） |
+| `/tts_bindings` | 查看全局引擎及所有会话绑定（管理员） |
+| `/tts_unbind_all` | 清除所有会话绑定（管理员） |
+
+---
+
+## 🔀 会话级引擎绑定
+
+不同群聊、私聊可以使用不同的 TTS 引擎，互不干扰。
+
+- 在某个群里输入 `/tts_bind 2`，该群就会使用第 2 个引擎
+- 其他群和私聊不受影响，继续使用全局默认
+- 输入 `/tts_unbind` 可解除绑定，回退全局
+- 绑定关系持久化存储，重启不丢失
 
 ---
 

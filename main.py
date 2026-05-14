@@ -36,7 +36,7 @@ def _get_session_id(event: AstrMessageEvent) -> str:
     "astrbot_plugin_universal_tts",
     "某不科学的高数",
     "通用 TTS 插件，支持多引擎切换，通过钩子拦截实现 TTS",
-    "1.2.0",
+    "1.2.1",
 )
 class UniversalTTSPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -391,6 +391,44 @@ class UniversalTTSPlugin(Star):
             lines.append(self._format_instance(i, ec, session_id))
         lines.append("\n切换实例: /tts_bind <序号>")
         yield event.plain_result("\n".join(lines))
+
+    @filter.command("tts_bindings")
+    async def list_bindings(self, event: AstrMessageEvent):
+        """[管理员] 查看所有会话绑定。用法: /tts_bindings"""
+        if not _is_slash(event):
+            return
+        global_name = self._engine.instance_name if self._engine else "(未初始化)"
+        lines = [f"全局默认引擎: {global_name}", ""]
+
+        if not self._session_bindings:
+            lines.append("暂无会话绑定，所有会话使用全局默认")
+        else:
+            lines.append(f"会话绑定 ({len(self._session_bindings)} 个)：")
+            for i, (sid, name) in enumerate(self._session_bindings.items(), 1):
+                short_sid = sid if len(sid) <= 30 else sid[:27] + "..."
+                lines.append(f"  {i}. {short_sid} → {name}")
+
+        lines.append("\n/tts_unbind_all 清除全部绑定")
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("tts_unbind_all")
+    async def unbind_all(self, event: AstrMessageEvent):
+        """[管理员] 清除所有会话绑定。用法: /tts_unbind_all"""
+        if not _is_slash(event):
+            return
+        if not self._session_bindings:
+            yield event.plain_result("当前没有任何会话绑定")
+            return
+
+        count = len(self._session_bindings)
+        for engine in self._session_engines.values():
+            await engine.close()
+        self._session_engines.clear()
+        self._session_bindings.clear()
+        self._save_bindings()
+
+        logger.info(f"[UniversalTTS] 已清除全部 {count} 个会话绑定")
+        yield event.plain_result(f"已清除全部 {count} 个会话绑定，所有会话将使用全局默认")
 
     async def terminate(self):
         """插件卸载时释放引擎资源"""

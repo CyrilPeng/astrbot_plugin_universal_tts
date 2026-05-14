@@ -1,6 +1,6 @@
 name: astrbot_plugin_universal_tts
 display_name: 通用 TTS
 desc: 通用 TTS 插件，支持多引擎切换（MiMo V2/V2.5、OpenAI 兼容、火山引擎、阿里云百炼、Azure、ElevenLabs、自定义 HTTP），注册为 AstrBot TTS Provider。
-version: v1.2.0
+version: v1.2.1
 author: 某不科学的高数
 repo: https://github.com/CyrilPeng/astrbot_plugin_universal_tts
