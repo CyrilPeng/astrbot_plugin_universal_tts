@@ -8,7 +8,7 @@
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-blue?style=flat-square)](https://github.com/AstrBotDevs/AstrBot)
 [![License](https://img.shields.io/badge/License-AGPL--3.0-green?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.2.1-orange?style=flat-square)]()
+[![Version](https://img.shields.io/badge/Version-1.2.2-orange?style=flat-square)]()
 
 一个为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 打造的通用语音合成插件。
 支持多种引擎，覆盖国内外主流 TTS 服务，还能自定义接入任意 HTTP API。
@@ -76,6 +76,9 @@ https://github.com/CyrilPeng/astrbot_plugin_universal_tts
 | `/tts_switch <序号>` | 切换全局默认引擎（管理员） |
 | `/tts_bindings` | 查看全局引擎及所有会话绑定（管理员） |
 | `/tts_unbind_all` | 清除所有会话绑定（管理员） |
+| `/tts_limit_on` | 开启 TTS 字数上限 |
+| `/tts_limit_off` | 关闭 TTS 字数上限 |
+| `/tts_limit_set <数字>` | 设置字数上限 |
 
 ---
 
@@ -87,6 +90,21 @@ https://github.com/CyrilPeng/astrbot_plugin_universal_tts
 - 其他群和私聊不受影响，继续使用全局默认
 - 输入 `/tts_unbind` 可解除绑定，回退全局
 - 绑定关系持久化存储，重启不丢失
+
+---
+
+## 🔢 TTS 字数上限
+
+可设置单次 TTS 转换的字数上限，防止长文本导致合成时间过长或费用过高。
+
+- 超过上限的回复不触发 TTS，以原始文本形式发送
+- 支持 UI 面板和指令两种方式配置
+- 默认上限 50 字符，可自定义
+
+**指令方式：**
+- `/tts_limit_on` — 开启字数上限
+- `/tts_limit_off` — 关闭字数上限
+- `/tts_limit_set <数字>` — 设置字数上限
 
 ---
 

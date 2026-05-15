@@ -12,6 +12,18 @@
     "default": 100,
     "hint": "0-100，表示每条 LLM 回复转为语音的概率。100 表示始终转语音，0 表示不触发。"
   },
+  "tts_text_limit_enable": {
+    "description": "启用 TTS 字数上限",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后，LLM 回复超过设定字数时将不触发 TTS，原文以文本形式发送。"
+  },
+  "tts_text_limit": {
+    "description": "TTS 字数上限",
+    "type": "int",
+    "default": 50,
+    "hint": "超过此字数的回复将不转为语音（仅在启用字数上限时生效）。默认 50 个字符。"
+  },
   "voice_clone_samples": {
     "description": "音色克隆样本文件",
     "type": "file",

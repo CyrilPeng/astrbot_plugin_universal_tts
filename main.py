@@ -189,6 +189,15 @@ class UniversalTTSPlugin(Star):
         if len(full_text) < 1:
             return
 
+        # 字数上限检查
+        if self.config.get("tts_text_limit_enable", False):
+            limit = self.config.get("tts_text_limit", 50)
+            if len(full_text) > limit:
+                logger.debug(
+                    f"[UniversalTTS] 文本字数 ({len(full_text)}) 超过上限 ({limit})，跳过 TTS"
+                )
+                return
+
         # 获取当前会话应使用的引擎
         session_id = _get_session_id(event)
         engine = self._get_engine_for_session(session_id)
@@ -429,6 +438,49 @@ class UniversalTTSPlugin(Star):
 
         logger.info(f"[UniversalTTS] 已清除全部 {count} 个会话绑定")
         yield event.plain_result(f"已清除全部 {count} 个会话绑定，所有会话将使用全局默认")
+
+    @filter.command("tts_limit_on")
+    async def enable_limit(self, event: AstrMessageEvent):
+        """开启 TTS 字数上限。用法: /tts_limit_on"""
+        if not _is_slash(event):
+            return
+        self.config["tts_text_limit_enable"] = True
+        limit = self.config.get("tts_text_limit", 50)
+        yield event.plain_result(f"已开启 TTS 字数上限，当前上限: {limit} 字符")
+
+    @filter.command("tts_limit_off")
+    async def disable_limit(self, event: AstrMessageEvent):
+        """关闭 TTS 字数上限。用法: /tts_limit_off"""
+        if not _is_slash(event):
+            return
+        self.config["tts_text_limit_enable"] = False
+        yield event.plain_result("已关闭 TTS 字数上限")
+
+    @filter.command("tts_limit_set")
+    async def set_limit(self, event: AstrMessageEvent):
+        """设置 TTS 字数上限。用法: /tts_limit_set <数字>"""
+        if not _is_slash(event):
+            return
+        args = _get_cmd_args(event)
+        if not args:
+            current_limit = self.config.get("tts_text_limit", 50)
+            current_enable = self.config.get("tts_text_limit_enable", False)
+            status = "已开启" if current_enable else "已关闭"
+            yield event.plain_result(
+                f"当前 TTS 字数上限: {current_limit} 字符 ({status})\n"
+                f"用法: /tts_limit_set <数字>"
+            )
+            return
+        try:
+            limit = int(args)
+            if limit <= 0:
+                yield event.plain_result("字数上限必须大于 0")
+                return
+        except ValueError:
+            yield event.plain_result(f"无效的数字: {args}")
+            return
+        self.config["tts_text_limit"] = limit
+        yield event.plain_result(f"已设置 TTS 字数上限为: {limit} 字符")
 
     async def terminate(self):
         """插件卸载时释放引擎资源"""
