@@ -36,7 +36,7 @@ def _get_session_id(event: AstrMessageEvent) -> str:
     "astrbot_plugin_universal_tts",
     "某不科学的高数",
     "通用 TTS 插件，支持多引擎切换，通过钩子拦截实现 TTS",
-    "1.2.1",
+    "1.2.3",
 )
 class UniversalTTSPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -45,6 +45,7 @@ class UniversalTTSPlugin(Star):
         self._engine: TTSEngine | None = None
         self._session_engines: dict[str, TTSEngine] = {}  # session_id -> engine
         self._session_bindings: dict[str, str] = {}  # session_id -> instance_name
+        self._last_tts_text: dict[str, str] = {}  # session_id -> 最近一次 TTS 文本
         self._temp_dir = Path("data") / "temp" / "universal_tts"
         self._temp_dir.mkdir(parents=True, exist_ok=True)
         self._bindings_file = Path("data") / "plugin_data" / "astrbot_plugin_universal_tts" / "session_bindings.json"
@@ -219,8 +220,39 @@ class UniversalTTSPlugin(Star):
         audio_path = self._temp_dir / f"tts_{uuid.uuid4().hex}.{fmt}"
         audio_path.write_bytes(audio_bytes)
 
-        # 替换消息链为语音
+        # 替换消息链为语音，缓存文本用于回复引用，同时记录日志
+        self._last_tts_text[session_id] = full_text
+        logger.info(f"[UniversalTTS] 发送语音 ({engine.instance_name}): {full_text[:80]}")
         result.chain = [Comp.Record(file=str(audio_path), url=str(audio_path))]
+
+    @filter.on_waiting_llm_request()
+    async def tts_reply_fix(self, event: AstrMessageEvent):
+        """修复引用语音消息时因 NapCat 临时文件已被清除而导致 'not a valid file' 报错的问题。
+        在 LLM 请求构建之前，将 Reply 链中的 Record 替换为缓存的文本。"""
+        for comp in event.get_messages():
+            if not isinstance(comp, Comp.Reply) or not comp.chain:
+                continue
+            new_chain = []
+            modified = False
+            for reply_comp in comp.chain:
+                if isinstance(reply_comp, Comp.Record):
+                    session_id = _get_session_id(event)
+                    cached = self._last_tts_text.get(session_id)
+                    if cached:
+                        new_chain.append(Comp.Plain(cached))
+                        logger.debug(
+                            f"[UniversalTTS] 已将引用语音替换为缓存文本: {cached[:30]}..."
+                        )
+                    else:
+                        new_chain.append(Comp.Plain("[语音消息]"))
+                        logger.debug(
+                            "[UniversalTTS] 未找到缓存文本，使用占位符替代引用语音"
+                        )
+                    modified = True
+                else:
+                    new_chain.append(reply_comp)
+            if modified:
+                comp.chain = new_chain
 
     def _list_engines(self) -> list[dict]:
         """获取已配置的引擎列表"""
