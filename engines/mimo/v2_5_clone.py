@@ -23,6 +23,10 @@ class MiMoV25CloneEngine(TTSEngine):
         self._sample_paths: list[str] = self.plugin_config.get("voice_clone_samples", [])
         self._sample_name: str = config.get("voice_sample_name", "")
 
+        # 参数校验
+        if not self.api_key:
+            raise ValueError("MiMo V2.5 VoiceClone TTS: api_key 不能为空")
+
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(timeout=self.timeout)
