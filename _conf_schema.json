@@ -24,6 +24,18 @@
     "default": 50,
     "hint": "超过此字数的回复将不转为语音（仅在启用字数上限时生效）。默认 50 个字符。"
   },
+  "temp_file_ttl_hours": {
+    "description": "临时音频保留时间（小时）",
+    "type": "int",
+    "default": 72,
+    "hint": "插件生成的临时语音文件超过该时间后会被自动清理。设置为 0 表示不按时间清理。"
+  },
+  "temp_file_max_count": {
+    "description": "临时音频最大保留数量",
+    "type": "int",
+    "default": 1000,
+    "hint": "临时语音文件数量超过该值时，会优先删除最旧的文件。设置为 0 表示不按数量清理。"
+  },
   "voice_clone_samples": {
     "description": "音色克隆样本文件",
     "type": "file",

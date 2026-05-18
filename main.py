@@ -2,6 +2,7 @@
 
 import json
 import random
+import time
 import uuid
 from pathlib import Path
 
@@ -46,6 +47,7 @@ class UniversalTTSPlugin(Star):
         self._session_engines: dict[str, TTSEngine] = {}  # session_id -> engine
         self._session_bindings: dict[str, str] = {}  # session_id -> instance_name
         self._last_tts_text: dict[str, str] = {}  # session_id -> 最近一次 TTS 文本
+        self._last_temp_cleanup_at = 0.0
         self._temp_dir = Path("data") / "temp" / "universal_tts"
         self._temp_dir.mkdir(parents=True, exist_ok=True)
         self._bindings_file = Path("data") / "plugin_data" / "astrbot_plugin_universal_tts" / "session_bindings.json"
@@ -68,6 +70,59 @@ class UniversalTTSPlugin(Star):
             )
         except Exception as e:
             logger.error(f"[UniversalTTS] 保存会话绑定失败: {e}")
+
+    def _cleanup_temp_files(self, force: bool = False):
+        """清理插件生成的过期临时音频文件。"""
+        now = time.time()
+        if not force and now - self._last_temp_cleanup_at < 300:
+            return
+        self._last_temp_cleanup_at = now
+
+        ttl_hours = self.config.get("temp_file_ttl_hours", 72)
+        max_count = self.config.get("temp_file_max_count", 1000)
+        try:
+            ttl_hours = max(0, int(ttl_hours))
+        except (TypeError, ValueError):
+            ttl_hours = 72
+        try:
+            max_count = max(0, int(max_count))
+        except (TypeError, ValueError):
+            max_count = 1000
+
+        files = []
+        for path in self._temp_dir.iterdir():
+            if not path.is_file() or not path.name.startswith(("tts_", "tts_test_")):
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            files.append((path, stat.st_mtime))
+
+        removed = 0
+        expire_before = now - ttl_hours * 3600 if ttl_hours > 0 else None
+        remaining = []
+        for path, mtime in files:
+            if expire_before is not None and mtime < expire_before:
+                try:
+                    path.unlink()
+                    removed += 1
+                except OSError as e:
+                    logger.warning(f"[UniversalTTS] 删除过期临时文件失败 {path}: {e}")
+            else:
+                remaining.append((path, mtime))
+
+        if max_count > 0 and len(remaining) > max_count:
+            remaining.sort(key=lambda item: item[1])
+            for path, _ in remaining[: len(remaining) - max_count]:
+                try:
+                    path.unlink()
+                    removed += 1
+                except OSError as e:
+                    logger.warning(f"[UniversalTTS] 删除超量临时文件失败 {path}: {e}")
+
+        if removed:
+            logger.info(f"[UniversalTTS] 已清理 {removed} 个临时音频文件")
 
     def _find_engine_config(self, name_or_idx: str) -> dict | None:
         """按序号或实例名查找引擎配置"""
@@ -115,6 +170,7 @@ class UniversalTTSPlugin(Star):
 
         # 加载会话绑定
         self._load_bindings()
+        self._cleanup_temp_files(force=True)
 
         # 获取引擎配置列表
         engines_config: list[dict] = self.config.get("engines", [])
@@ -219,6 +275,7 @@ class UniversalTTSPlugin(Star):
         # 保存音频文件
         audio_path = self._temp_dir / f"tts_{uuid.uuid4().hex}.{fmt}"
         audio_path.write_bytes(audio_bytes)
+        self._cleanup_temp_files()
 
         # 替换消息链为语音，缓存文本用于回复引用，同时记录日志
         self._last_tts_text[session_id] = full_text
@@ -410,6 +467,7 @@ class UniversalTTSPlugin(Star):
             audio_bytes, fmt = await engine.synthesize(text)
             audio_path = self._temp_dir / f"tts_test_{uuid.uuid4().hex}.{fmt}"
             audio_path.write_bytes(audio_bytes)
+            self._cleanup_temp_files()
             yield event.chain_result(
                 [Comp.Record(file=str(audio_path), url=str(audio_path))]
             )
