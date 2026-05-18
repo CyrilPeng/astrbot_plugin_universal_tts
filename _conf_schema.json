@@ -36,6 +36,18 @@
     "default": 1000,
     "hint": "临时语音文件数量超过该值时，会优先删除最旧的文件。设置为 0 表示不按数量清理。"
   },
+  "admin_only_commands": {
+    "description": "仅管理员可使用管理命令",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，切换全局引擎、查看/清空全部绑定、修改字数限制等命令仅管理员或白名单用户可用。"
+  },
+  "admin_user_ids": {
+    "description": "管理命令白名单用户 ID",
+    "type": "list",
+    "default": [],
+    "hint": "当平台事件无法识别管理员身份时，可在此填写允许使用管理命令的用户 ID。"
+  },
   "voice_clone_samples": {
     "description": "音色克隆样本文件",
     "type": "file",

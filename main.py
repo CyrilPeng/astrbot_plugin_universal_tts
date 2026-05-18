@@ -1,5 +1,6 @@
 """通用 TTS 插件 - 通过钩子拦截消息，自行完成 TTS 合成"""
 
+import inspect
 import json
 import random
 import time
@@ -31,6 +32,39 @@ def _get_cmd_args(event: AstrMessageEvent) -> str:
 def _get_session_id(event: AstrMessageEvent) -> str:
     """获取当前会话的唯一标识（UMO）"""
     return getattr(event, "unified_msg_origin", "") or ""
+
+
+def _get_event_user_ids(event: AstrMessageEvent) -> set[str]:
+    """尽量从不同平台事件结构中提取发送者 ID。"""
+    user_ids: set[str] = set()
+    for obj in (event, getattr(event, "message_obj", None)):
+        if obj is None:
+            continue
+        for attr in ("sender_id", "user_id", "userId", "qq", "wxid"):
+            value = getattr(obj, attr, None)
+            if value:
+                user_ids.add(str(value))
+        sender = getattr(obj, "sender", None)
+        if isinstance(sender, dict):
+            for key in ("user_id", "sender_id", "id", "qq", "wxid"):
+                value = sender.get(key)
+                if value:
+                    user_ids.add(str(value))
+        elif sender is not None:
+            for attr in ("user_id", "sender_id", "id", "qq", "wxid"):
+                value = getattr(sender, attr, None)
+                if value:
+                    user_ids.add(str(value))
+
+    get_sender_id = getattr(event, "get_sender_id", None)
+    if callable(get_sender_id):
+        try:
+            value = get_sender_id()
+            if value:
+                user_ids.add(str(value))
+        except Exception:
+            pass
+    return user_ids
 
 
 @register(
@@ -70,6 +104,36 @@ class UniversalTTSPlugin(Star):
             )
         except Exception as e:
             logger.error(f"[UniversalTTS] 保存会话绑定失败: {e}")
+
+    async def _has_admin_permission(self, event: AstrMessageEvent) -> bool:
+        """检查是否允许执行全局管理命令。"""
+        if not self.config.get("admin_only_commands", True):
+            return True
+
+        admin_ids = {str(item).strip() for item in self.config.get("admin_user_ids", []) if str(item).strip()}
+        if admin_ids and _get_event_user_ids(event) & admin_ids:
+            return True
+
+        for method_name in ("is_admin", "is_at_admin", "is_msg_admin"):
+            method = getattr(event, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                result = method()
+                if inspect.isawaitable(result):
+                    result = await result
+                if result:
+                    return True
+            except Exception as e:
+                logger.debug(f"[UniversalTTS] 管理员权限检查 {method_name} 失败: {e}")
+
+        return False
+
+    async def _ensure_admin_permission(self, event: AstrMessageEvent) -> bool:
+        if await self._has_admin_permission(event):
+            return True
+        logger.warning("[UniversalTTS] 已拒绝非管理员执行 TTS 管理命令")
+        return False
 
     def _cleanup_temp_files(self, force: bool = False):
         """清理插件生成的过期临时音频文件。"""
@@ -332,6 +396,9 @@ class UniversalTTSPlugin(Star):
         """[管理员] 切换全局 TTS 引擎。用法: /tts_switch <序号或实例名>"""
         if not _is_slash(event):
             return
+        if not await self._ensure_admin_permission(event):
+            yield event.plain_result("权限不足：该命令仅管理员可用")
+            return
         args = _get_cmd_args(event)
         engines_config = self._list_engines()
         session_id = _get_session_id(event)
@@ -496,6 +563,9 @@ class UniversalTTSPlugin(Star):
         """[管理员] 查看所有会话绑定。用法: /tts_bindings"""
         if not _is_slash(event):
             return
+        if not await self._ensure_admin_permission(event):
+            yield event.plain_result("权限不足：该命令仅管理员可用")
+            return
         global_name = self._engine.instance_name if self._engine else "(未初始化)"
         lines = [f"全局默认引擎: {global_name}", ""]
 
@@ -514,6 +584,9 @@ class UniversalTTSPlugin(Star):
     async def unbind_all(self, event: AstrMessageEvent):
         """[管理员] 清除所有会话绑定。用法: /tts_unbind_all"""
         if not _is_slash(event):
+            return
+        if not await self._ensure_admin_permission(event):
+            yield event.plain_result("权限不足：该命令仅管理员可用")
             return
         if not self._session_bindings:
             yield event.plain_result("当前没有任何会话绑定")
@@ -534,6 +607,9 @@ class UniversalTTSPlugin(Star):
         """开启 TTS 字数上限。用法: /tts_limit_on"""
         if not _is_slash(event):
             return
+        if not await self._ensure_admin_permission(event):
+            yield event.plain_result("权限不足：该命令仅管理员可用")
+            return
         self.config["tts_text_limit_enable"] = True
         limit = self.config.get("tts_text_limit", 50)
         yield event.plain_result(f"已开启 TTS 字数上限，当前上限: {limit} 字符")
@@ -543,6 +619,9 @@ class UniversalTTSPlugin(Star):
         """关闭 TTS 字数上限。用法: /tts_limit_off"""
         if not _is_slash(event):
             return
+        if not await self._ensure_admin_permission(event):
+            yield event.plain_result("权限不足：该命令仅管理员可用")
+            return
         self.config["tts_text_limit_enable"] = False
         yield event.plain_result("已关闭 TTS 字数上限")
 
@@ -550,6 +629,9 @@ class UniversalTTSPlugin(Star):
     async def set_limit(self, event: AstrMessageEvent):
         """设置 TTS 字数上限。用法: /tts_limit_set <数字>"""
         if not _is_slash(event):
+            return
+        if not await self._ensure_admin_permission(event):
+            yield event.plain_result("权限不足：该命令仅管理员可用")
             return
         args = _get_cmd_args(event)
         if not args:
