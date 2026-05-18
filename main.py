@@ -74,7 +74,7 @@ def _get_event_user_ids(event: AstrMessageEvent) -> set[str]:
     "astrbot_plugin_universal_tts",
     "某不科学的高数",
     "通用 TTS 插件，支持多引擎切换，通过钩子拦截实现 TTS",
-    "1.3.0",
+    "1.3.1",
 )
 class UniversalTTSPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
