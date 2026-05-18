@@ -81,6 +81,7 @@ class UniversalTTSPlugin(Star):
         self._session_engines: dict[str, TTSEngine] = {}  # session_id -> engine
         self._session_bindings: dict[str, str] = {}  # session_id -> instance_name
         self._last_tts_text: dict[str, str] = {}  # session_id -> 最近一次 TTS 文本
+        self._tts_audio_text: dict[str, str] = {}  # audio_path -> TTS 文本（用于引用还原）
         self._last_temp_cleanup_at = 0.0
         self._temp_dir = Path("data") / "temp" / "universal_tts"
         self._temp_dir.mkdir(parents=True, exist_ok=True)
@@ -342,6 +343,8 @@ class UniversalTTSPlugin(Star):
         self._cleanup_temp_files()
 
         # 替换消息链为语音，缓存文本用于回复引用，同时记录日志
+        audio_path_str = str(audio_path)
+        self._tts_audio_text[audio_path_str] = full_text
         self._last_tts_text[session_id] = full_text
         logger.info(f"[UniversalTTS] 发送语音 ({engine.instance_name}): {full_text[:80]}")
         result.chain = [Comp.Record(file=str(audio_path), url=str(audio_path))]
@@ -350,6 +353,9 @@ class UniversalTTSPlugin(Star):
     async def tts_reply_fix(self, event: AstrMessageEvent):
         """修复引用语音消息时因 NapCat 临时文件已被清除而导致 'not a valid file' 报错的问题。
         在 LLM 请求构建之前，将 Reply 链中的 Record 替换为缓存的文本。"""
+        session_id = _get_session_id(event)
+        session_last_text = self._last_tts_text.get(session_id, "")
+
         for comp in event.get_messages():
             if not isinstance(comp, Comp.Reply) or not comp.chain:
                 continue
@@ -357,8 +363,14 @@ class UniversalTTSPlugin(Star):
             modified = False
             for reply_comp in comp.chain:
                 if isinstance(reply_comp, Comp.Record):
-                    session_id = _get_session_id(event)
-                    cached = self._last_tts_text.get(session_id)
+                    # 优先按文件路径匹配，其次使用会话最近一次文本
+                    cached = None
+                    file_path = getattr(reply_comp, "file", "") or getattr(reply_comp, "url", "")
+                    if file_path:
+                        cached = self._tts_audio_text.get(file_path)
+                    if not cached and session_last_text:
+                        cached = session_last_text
+
                     if cached:
                         new_chain.append(Comp.Plain(cached))
                         logger.debug(
