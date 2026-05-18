@@ -14,6 +14,7 @@ from astrbot.api import logger
 from ..base import TTSEngine
 
 _PLACEHOLDER_RE = re.compile(r"\$\{([^}]+)\}")
+_ALLOWED_AUDIO_FORMATS = {"mp3", "wav", "ogg", "opus", "aac", "flac", "pcm"}
 
 
 class CustomHTTPEngine(TTSEngine):
@@ -36,10 +37,11 @@ class CustomHTTPEngine(TTSEngine):
         self._sample_paths: list[str] = self.plugin_config.get("voice_clone_samples", [])
         self._sample_name: str = config.get("voice_sample_name", "")
 
-        # 参数校验：净化音频格式扩展名
-        if not self.audio_format or not self.audio_format.replace(".", "").isalnum():
-            raise ValueError(f"无效的音频格式: {self.audio_format}，请使用 mp3/wav/ogg/aac/flac/pcm")
+        # 参数校验：只允许明确支持的文件扩展名。
         self.audio_format = self.audio_format.lower().lstrip(".")
+        if self.audio_format not in _ALLOWED_AUDIO_FORMATS:
+            allowed = "/".join(sorted(_ALLOWED_AUDIO_FORMATS))
+            raise ValueError(f"无效的音频格式: {self.audio_format}，请使用 {allowed}")
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
