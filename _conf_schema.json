@@ -59,7 +59,7 @@
     "description": "当前生效的引擎实例名称",
     "type": "string",
     "default": "",
-    "hint": "填写下方引擎列表中某个实例的名称，或使用 /tts_switch 序号切换。留空则使用第一个。"
+    "hint": "填写下方引擎列表中某个实例的名称，或使用 /tts_switch 序号切换。留空则使用第一个；使用 /tts_switch 0 可关闭全局默认 TTS。"
   },
   "engines": {
     "type": "template_list",

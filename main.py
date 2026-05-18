@@ -15,6 +15,9 @@ from astrbot.api.star import Context, Star, register
 from .engines import get_engine, TTSEngine
 
 
+DISABLED_ENGINE = "__disabled__"
+
+
 def _is_slash(event: AstrMessageEvent) -> bool:
     """判断原始消息是否以斜杠开头（强制要求斜杠指令）"""
     raw = getattr(event.message_obj, "message_str", "") or ""
@@ -81,13 +84,16 @@ class UniversalTTSPlugin(Star):
         self._session_engines: dict[str, TTSEngine] = {}  # [已弃用] session_id -> engine，保持兼容但已不使用
         self._cached_engines: dict[str, TTSEngine] = {}  # instance_name -> engine（同名引擎复用实例）
         self._session_bindings: dict[str, str] = {}  # session_id -> instance_name
+        self._runtime_enabled = True
         self._last_tts_text: dict[str, str] = {}  # session_id -> 最近一次 TTS 文本
         self._tts_audio_text: dict[str, str] = {}  # audio_path -> TTS 文本（用于引用还原）
         self._last_temp_cleanup_at = 0.0
         self._temp_dir = Path("data") / "temp" / "universal_tts"
         self._temp_dir.mkdir(parents=True, exist_ok=True)
-        self._bindings_file = Path("data") / "plugin_data" / "astrbot_plugin_universal_tts" / "session_bindings.json"
-        self._bindings_file.parent.mkdir(parents=True, exist_ok=True)
+        self._data_dir = Path("data") / "plugin_data" / "astrbot_plugin_universal_tts"
+        self._bindings_file = self._data_dir / "session_bindings.json"
+        self._runtime_state_file = self._data_dir / "runtime_state.json"
+        self._data_dir.mkdir(parents=True, exist_ok=True)
 
     def _load_bindings(self):
         """从文件加载会话绑定"""
@@ -106,6 +112,27 @@ class UniversalTTSPlugin(Star):
             )
         except Exception as e:
             logger.error(f"[UniversalTTS] 保存会话绑定失败: {e}")
+
+    def _load_runtime_state(self):
+        """加载运行时开关状态。"""
+        if not self._runtime_state_file.exists():
+            return
+        try:
+            data = json.loads(self._runtime_state_file.read_text(encoding="utf-8"))
+            self._runtime_enabled = bool(data.get("runtime_enabled", True))
+        except Exception as e:
+            logger.warning(f"[UniversalTTS] 加载运行状态失败，使用默认开启状态: {e}")
+            self._runtime_enabled = True
+
+    def _save_runtime_state(self):
+        """持久化运行时开关状态。"""
+        try:
+            self._runtime_state_file.write_text(
+                json.dumps({"runtime_enabled": self._runtime_enabled}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            logger.error(f"[UniversalTTS] 保存运行状态失败: {e}")
 
     async def _has_admin_permission(self, event: AstrMessageEvent) -> bool:
         """检查是否允许执行全局管理命令。"""
@@ -192,6 +219,8 @@ class UniversalTTSPlugin(Star):
 
     def _find_engine_config(self, name_or_idx: str) -> dict | None:
         """按序号或实例名查找引擎配置"""
+        if name_or_idx == "0":
+            return None
         engines_config = self._list_engines()
         if name_or_idx.isdigit():
             idx = int(name_or_idx)
@@ -206,6 +235,8 @@ class UniversalTTSPlugin(Star):
         """获取指定会话应使用的引擎（有绑定用绑定，否则用全局）"""
         if session_id and session_id in self._session_bindings:
             bound_name = self._session_bindings[session_id]
+            if bound_name == DISABLED_ENGINE:
+                return None
             # 检查同名引擎是否已缓存，复用实例
             if bound_name in self._cached_engines:
                 return self._cached_engines[bound_name]
@@ -236,6 +267,7 @@ class UniversalTTSPlugin(Star):
 
         # 加载会话绑定
         self._load_bindings()
+        self._load_runtime_state()
         self._cleanup_temp_files(force=True)
 
         # 获取引擎配置列表
@@ -247,6 +279,12 @@ class UniversalTTSPlugin(Star):
         # 根据 active_engine 选择生效的全局引擎
         active_engine_name = self.config.get("active_engine", "").strip()
         engine_config = None
+
+        if active_engine_name == DISABLED_ENGINE:
+            logger.info("[UniversalTTS] 已启用，全局默认 TTS 已关闭")
+            if self._session_bindings:
+                logger.info(f"[UniversalTTS] 已加载 {len(self._session_bindings)} 个会话绑定")
+            return
 
         if active_engine_name:
             for ec in engines_config:
@@ -282,7 +320,7 @@ class UniversalTTSPlugin(Star):
         """钩子：在消息发送前将文本转为语音"""
         if not self.config.get("enable", True):
             return
-        if self._engine is None:
+        if not self._runtime_enabled:
             return
 
         # TTS 触发概率
@@ -402,12 +440,30 @@ class UniversalTTSPlugin(Star):
         """获取已配置的引擎列表"""
         return self.config.get("engines", []) or []
 
+    def _format_binding_name(self, name: str) -> str:
+        """格式化绑定名称。"""
+        return "禁用 TTS" if name == DISABLED_ENGINE else name
+
+    def _global_engine_name(self) -> str:
+        if self.config.get("active_engine", "").strip() == DISABLED_ENGINE:
+            return "关闭"
+        return self._engine.instance_name if self._engine else "(未初始化)"
+
+    def _session_tts_status(self, session_id: str) -> str:
+        binding = self._session_bindings.get(session_id)
+        if binding == DISABLED_ENGINE:
+            return "当前会话已禁用 TTS"
+        if binding:
+            return f"当前会话绑定引擎: {binding}"
+        global_name = self._global_engine_name()
+        return f"当前会话使用全局默认: {global_name}"
+
     def _format_instance(self, idx: int, ec: dict, session_id: str = "") -> str:
         """格式化引擎条目"""
         name = (ec.get("instance_name") or "").strip() or ec.get("__template_key", "unknown")
         ttype = ec.get("__template_key", "")
         markers = []
-        if self._engine and self._engine.instance_name == name:
+        if self._engine and self.config.get("active_engine", "").strip() != DISABLED_ENGINE and self._engine.instance_name == name:
             markers.append("全局")
         if session_id and self._session_bindings.get(session_id) == name:
             markers.append("本会话")
@@ -430,11 +486,26 @@ class UniversalTTSPlugin(Star):
             if not engines_config:
                 yield event.plain_result("未配置任何 TTS 引擎")
                 return
-            lines = ["当前配置的 TTS 引擎："]
+            lines = [
+                f"TTS 总开关: {'开启' if self._runtime_enabled else '关闭'}",
+                f"全局默认引擎: {self._global_engine_name()}",
+                "",
+                "当前配置的 TTS 引擎：",
+                "  0. 关闭全局默认 TTS",
+            ]
             for i, ec in enumerate(engines_config, 1):
                 lines.append(self._format_instance(i, ec, session_id))
-            lines.append("\n用法: /tts_switch <序号或实例名>")
+            lines.append("\n用法: /tts_switch <序号或实例名>，/tts_switch 0 关闭全局默认 TTS")
             yield event.plain_result("\n".join(lines))
+            return
+
+        if args == "0":
+            if self._engine:
+                await self._engine.close()
+            self._engine = None
+            self.config["active_engine"] = DISABLED_ENGINE
+            logger.info("[UniversalTTS] 已关闭全局默认 TTS")
+            yield event.plain_result("已关闭全局默认 TTS。已绑定具体引擎的会话不受影响，使用 /tts_off 可暂停全部会话。")
             return
 
         target_config = self._find_engine_config(args)
@@ -474,7 +545,13 @@ class UniversalTTSPlugin(Star):
         if not args:
             # 显示当前会话绑定状态
             bound = self._session_bindings.get(session_id)
-            if bound:
+            if bound == DISABLED_ENGINE:
+                yield event.plain_result(
+                    "当前会话已禁用 TTS\n"
+                    "使用 /tts_unbind 回退全局默认\n"
+                    "使用 /tts_bind <序号或实例名> 绑定具体引擎"
+                )
+            elif bound:
                 yield event.plain_result(
                     f"当前会话已绑定引擎: {bound}\n"
                     f"使用 /tts_unbind 解除绑定\n"
@@ -485,6 +562,13 @@ class UniversalTTSPlugin(Star):
                     f"当前会话未绑定引擎，使用全局默认\n"
                     f"使用 /tts_bind <序号或实例名> 绑定"
                 )
+            return
+
+        if args == "0":
+            self._session_bindings[session_id] = DISABLED_ENGINE
+            self._save_bindings()
+            logger.info(f"[UniversalTTS] 会话 {session_id[:20]}... 已禁用 TTS")
+            yield event.plain_result("已为当前会话禁用 TTS。使用 /tts_unbind 可回退全局默认。")
             return
 
         target_config = self._find_engine_config(args)
@@ -546,7 +630,7 @@ class UniversalTTSPlugin(Star):
         session_id = _get_session_id(event)
         engine = self._get_engine_for_session(session_id)
         if not engine:
-            yield event.plain_result("TTS 引擎未初始化，请检查插件配置")
+            yield event.plain_result("当前会话没有可用 TTS 引擎，请检查全局默认或会话绑定状态")
             return
 
         try:
@@ -567,14 +651,21 @@ class UniversalTTSPlugin(Star):
         if not _is_slash(event):
             return
         engines_config = self._list_engines()
-        if not engines_config:
-            yield event.plain_result("未配置任何 TTS 引擎")
-            return
         session_id = _get_session_id(event)
-        lines = ["已配置的 TTS 引擎实例："]
+        lines = [
+            f"TTS 总开关: {'开启' if self._runtime_enabled else '关闭'}",
+            f"全局默认引擎: {self._global_engine_name()}",
+            self._session_tts_status(session_id),
+            "",
+            "可用 TTS 引擎：",
+            "  0. 关闭当前会话 TTS",
+        ]
         for i, ec in enumerate(engines_config, 1):
             lines.append(self._format_instance(i, ec, session_id))
-        lines.append("\n切换实例: /tts_bind <序号>")
+        if not engines_config:
+            lines.append("  (未配置任何 TTS 引擎)")
+        lines.append("\n当前会话关闭: /tts_bind 0")
+        lines.append("当前会话绑定: /tts_bind <序号>")
         yield event.plain_result("\n".join(lines))
 
     @filter.command("tts_bindings")
@@ -585,8 +676,11 @@ class UniversalTTSPlugin(Star):
         if not await self._ensure_admin_permission(event):
             yield event.plain_result("权限不足：该命令仅管理员可用")
             return
-        global_name = self._engine.instance_name if self._engine else "(未初始化)"
-        lines = [f"全局默认引擎: {global_name}", ""]
+        lines = [
+            f"TTS 总开关: {'开启' if self._runtime_enabled else '关闭'}",
+            f"全局默认引擎: {self._global_engine_name()}",
+            "",
+        ]
 
         if not self._session_bindings:
             lines.append("暂无会话绑定，所有会话使用全局默认")
@@ -594,7 +688,7 @@ class UniversalTTSPlugin(Star):
             lines.append(f"会话绑定 ({len(self._session_bindings)} 个)：")
             for i, (sid, name) in enumerate(self._session_bindings.items(), 1):
                 short_sid = sid if len(sid) <= 30 else sid[:27] + "..."
-                lines.append(f"  {i}. {short_sid} → {name}")
+                lines.append(f"  {i}. {short_sid} → {self._format_binding_name(name)}")
 
         lines.append("\n/tts_unbind_all 清除全部绑定")
         yield event.plain_result("\n".join(lines))
@@ -621,6 +715,50 @@ class UniversalTTSPlugin(Star):
 
         logger.info(f"[UniversalTTS] 已清除全部 {count} 个会话绑定")
         yield event.plain_result(f"已清除全部 {count} 个会话绑定，所有会话将使用全局默认")
+
+    @filter.command("tts_off")
+    async def disable_runtime(self, event: AstrMessageEvent):
+        """[管理员] 暂停所有会话的自动 TTS。用法: /tts_off"""
+        if not _is_slash(event):
+            return
+        if not await self._ensure_admin_permission(event):
+            yield event.plain_result("权限不足：该命令仅管理员可用")
+            return
+        self._runtime_enabled = False
+        self._save_runtime_state()
+        logger.info("[UniversalTTS] 已暂停全部会话的自动 TTS")
+        yield event.plain_result("已暂停全部会话的自动 TTS。会话绑定不会被修改，使用 /tts_on 恢复。")
+
+    @filter.command("tts_on")
+    async def enable_runtime(self, event: AstrMessageEvent):
+        """[管理员] 恢复所有会话的自动 TTS。用法: /tts_on"""
+        if not _is_slash(event):
+            return
+        if not await self._ensure_admin_permission(event):
+            yield event.plain_result("权限不足：该命令仅管理员可用")
+            return
+        self._runtime_enabled = True
+        self._save_runtime_state()
+        logger.info("[UniversalTTS] 已恢复自动 TTS")
+        yield event.plain_result("已恢复自动 TTS。全局默认和会话绑定将按原状态生效。")
+
+    @filter.command("tts_status")
+    async def tts_status(self, event: AstrMessageEvent):
+        """查看 TTS 开关和当前会话状态。用法: /tts_status"""
+        if not _is_slash(event):
+            return
+        session_id = _get_session_id(event)
+        lines = [
+            f"TTS 总开关: {'开启' if self._runtime_enabled else '关闭'}",
+            f"全局默认引擎: {self._global_engine_name()}",
+            self._session_tts_status(session_id),
+            "",
+            "全局暂停: /tts_off",
+            "全局恢复: /tts_on",
+            "关闭当前会话: /tts_bind 0",
+            "关闭全局默认: /tts_switch 0",
+        ]
+        yield event.plain_result("\n".join(lines))
 
     @filter.command("tts_limit_on")
     async def enable_limit(self, event: AstrMessageEvent):

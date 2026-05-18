@@ -72,10 +72,15 @@ https://github.com/CyrilPeng/astrbot_plugin_universal_tts
 | 指令 | 说明 |
 |------|------|
 | `/tts_test [文本]` | 测试当前会话引擎的合成效果 |
+| `/tts_status` | 查看 TTS 总开关、全局默认和当前会话状态 |
 | `/tts_engines` | 列出所有已配置引擎（标注全局/本会话状态） |
 | `/tts_bind <序号>` | 为当前群聊/私聊绑定专属引擎 |
+| `/tts_bind 0` | 关闭当前会话 TTS |
 | `/tts_unbind` | 解除当前会话的绑定，回退全局 |
 | `/tts_switch <序号>` | 切换全局默认引擎（管理员） |
+| `/tts_switch 0` | 关闭全局默认 TTS（管理员） |
+| `/tts_off` | 暂停全部会话的自动 TTS（管理员） |
+| `/tts_on` | 恢复全部会话的自动 TTS（管理员） |
 | `/tts_bindings` | 查看全局引擎及所有会话绑定（管理员） |
 | `/tts_unbind_all` | 清除所有会话绑定（管理员） |
 | `/tts_limit_on` | 开启 TTS 字数上限 |
@@ -89,6 +94,9 @@ https://github.com/CyrilPeng/astrbot_plugin_universal_tts
 不同群聊、私聊可以使用不同的 TTS 引擎，互不干扰。
 
 - 在某个群里输入 `/tts_bind 2`，该群就会使用第 2 个引擎
+- 输入 `/tts_bind 0` 可关闭当前群聊/私聊的 TTS
+- 输入 `/tts_switch 0` 可关闭全局默认 TTS，但不影响已绑定具体引擎的会话
+- 管理员可用 `/tts_off` 暂停所有会话的自动 TTS，之后用 `/tts_on` 恢复，原有绑定不会被修改
 - 其他群和私聊不受影响，继续使用全局默认
 - 输入 `/tts_unbind` 可解除绑定，回退全局
 - 绑定关系持久化存储，重启不丢失

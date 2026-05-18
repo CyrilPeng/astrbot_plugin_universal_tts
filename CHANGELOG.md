@@ -1,5 +1,11 @@
 # 更新日志
 
+## Unreleased
+
+### 新增
+- **多层 TTS 开关**：新增 `/tts_on`、`/tts_off`、`/tts_status`，支持管理员暂停/恢复全部会话自动 TTS，并查看当前状态
+- **关闭选项**：`/tts_bind 0` 可关闭当前会话 TTS，`/tts_switch 0` 可关闭全局默认 TTS
+
 ## v1.3.0
 
 ### 新增
