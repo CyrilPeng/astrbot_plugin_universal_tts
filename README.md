@@ -8,7 +8,7 @@
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-blue?style=flat-square)](https://github.com/AstrBotDevs/AstrBot)
 [![License](https://img.shields.io/badge/License-AGPL--3.0-green?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.2.2-orange?style=flat-square)]()
+[![Version](https://img.shields.io/badge/Version-1.3.0-orange?style=flat-square)]()
 
 一个为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 打造的通用语音合成插件。
 支持多种引擎，覆盖国内外主流 TTS 服务，还能自定义接入任意 HTTP API。
@@ -67,6 +67,8 @@ https://github.com/CyrilPeng/astrbot_plugin_universal_tts
 
 所有指令必须以 `/` 开头。
 
+管理命令默认仅管理员可用。如果平台事件无法识别管理员身份，请在插件配置的 `admin_user_ids` 中填写允许使用管理命令的用户 ID。
+
 | 指令 | 说明 |
 |------|------|
 | `/tts_test [文本]` | 测试当前会话引擎的合成效果 |
@@ -117,6 +119,7 @@ https://github.com/CyrilPeng/astrbot_plugin_universal_tts
 | 占位符 | 含义 |
 |--------|------|
 | `${TEXT}` | 待合成文本 |
+| `${TEXT_JSON}` | JSON 字符串形式的待合成文本，自动处理引号和换行 |
 | `${API_KEY}` | 你配置的密钥 |
 | `${VOICE_SAMPLE_BASE64}` | 音色样本 base64（含 data URI） |
 | `${VOICE_SAMPLE_BASE64_RAW}` | 音色样本纯 base64 |
@@ -128,7 +131,7 @@ https://github.com/CyrilPeng/astrbot_plugin_universal_tts
 URL:      https://api.example.com/v1/tts
 Method:   POST
 Headers:  Authorization: Bearer ${API_KEY}
-Body:     {"text": "${TEXT}", "voice": "alloy"}
+Body:     {"text": ${TEXT_JSON}, "voice": "alloy"}
 响应类型:  binary
 音频格式:  mp3
 ```
@@ -139,7 +142,7 @@ Body:     {"text": "${TEXT}", "voice": "alloy"}
 URL:      https://api.example.com/v1/chat/completions
 Method:   POST
 Headers:  api-key: ${API_KEY}
-Body:     {"model": "tts", "messages": [{"role": "assistant", "content": "${TEXT}"}]}
+Body:     {"model": "tts", "messages": [{"role": "assistant", "content": ${TEXT_JSON}}]}
 响应类型:  json
 音频路径:  choices.0.message.audio.data
 音频编码:  base64
