@@ -197,13 +197,13 @@
       },
       "custom_http": {
         "name": "[自定义] HTTP TTS（模板化接入任意 API）",
-        "hint": "占位符: ${TEXT}、${API_KEY}、${VOICE_SAMPLE_BASE64}、${VOICE_SAMPLE_BASE64_RAW}、${VOICE_SAMPLE_PATH}",
+        "hint": "占位符: ${TEXT}、${TEXT_JSON}、${API_KEY}、${VOICE_SAMPLE_BASE64}、${VOICE_SAMPLE_BASE64_RAW}、${VOICE_SAMPLE_PATH}",
         "items": {
           "instance_name": { "description": "实例名称（用于标识和切换）", "type": "string", "default": "custom_tts" },
           "url": { "description": "请求 URL", "type": "string", "default": "https://api.example.com/v1/tts" },
           "method": { "description": "HTTP 方法", "type": "string", "default": "POST", "options": ["GET", "POST"] },
           "headers": { "description": "请求头（每行 Key: Value）", "type": "text", "default": "Authorization: Bearer ${API_KEY}\nContent-Type: application/json" },
-          "body_template": { "description": "请求体模板", "type": "text", "default": "{\"text\": \"${TEXT}\", \"voice\": \"default\"}" },
+          "body_template": { "description": "请求体模板", "type": "text", "default": "{\"text\": ${TEXT_JSON}, \"voice\": \"default\"}" },
           "body_format": { "description": "请求体格式", "type": "string", "default": "json", "options": ["json", "form"] },
           "response_type": { "description": "响应类型", "type": "string", "default": "binary", "options": ["binary", "json"] },
           "response_audio_path": { "description": "JSON 音频路径", "type": "string", "default": "", "hint": "如 choices.0.message.audio.data" },

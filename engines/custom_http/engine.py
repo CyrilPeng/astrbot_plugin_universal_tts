@@ -47,6 +47,8 @@ class CustomHTTPEngine(TTSEngine):
             name = match.group(1)
             if name == "TEXT":
                 return text
+            elif name == "TEXT_JSON":
+                return json.dumps(text, ensure_ascii=False)
             elif name == "API_KEY":
                 if not self.api_key:
                     raise ValueError("自定义 HTTP 引擎: ${API_KEY} 占位符需要配置 api_key")
