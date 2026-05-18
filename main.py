@@ -37,6 +37,21 @@ def _get_session_id(event: AstrMessageEvent) -> str:
     return getattr(event, "unified_msg_origin", "") or ""
 
 
+def _format_session_id(session_id: str) -> str:
+    """将 UMO 格式化为稳定、可读的会话标识。"""
+    parts = session_id.split(":")
+    if len(parts) >= 3:
+        message_type = parts[-2]
+        target_id = parts[-1]
+        type_map = {
+            "GroupMessage": "群聊",
+            "FriendMessage": "私聊",
+        }
+        label = type_map.get(message_type, message_type)
+        return f"{label}:{target_id}"
+    return session_id if len(session_id) <= 48 else session_id[:45] + "..."
+
+
 def _get_event_user_ids(event: AstrMessageEvent) -> set[str]:
     """尽量从不同平台事件结构中提取发送者 ID。"""
     user_ids: set[str] = set()
@@ -687,8 +702,7 @@ class UniversalTTSPlugin(Star):
         else:
             lines.append(f"会话绑定 ({len(self._session_bindings)} 个)：")
             for i, (sid, name) in enumerate(self._session_bindings.items(), 1):
-                short_sid = sid if len(sid) <= 30 else sid[:27] + "..."
-                lines.append(f"  {i}. {short_sid} → {self._format_binding_name(name)}")
+                lines.append(f"  {i}. {_format_session_id(sid)} → {self._format_binding_name(name)}")
 
         lines.append("\n/tts_unbind_all 清除全部绑定")
         yield event.plain_result("\n".join(lines))
