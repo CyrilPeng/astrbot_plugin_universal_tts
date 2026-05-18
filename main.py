@@ -78,7 +78,8 @@ class UniversalTTSPlugin(Star):
         super().__init__(context)
         self.config = config
         self._engine: TTSEngine | None = None
-        self._session_engines: dict[str, TTSEngine] = {}  # session_id -> engine
+        self._session_engines: dict[str, TTSEngine] = {}  # [已弃用] session_id -> engine，保持兼容但已不使用
+        self._cached_engines: dict[str, TTSEngine] = {}  # instance_name -> engine（同名引擎复用实例）
         self._session_bindings: dict[str, str] = {}  # session_id -> instance_name
         self._last_tts_text: dict[str, str] = {}  # session_id -> 最近一次 TTS 文本
         self._tts_audio_text: dict[str, str] = {}  # audio_path -> TTS 文本（用于引用还原）
@@ -204,16 +205,16 @@ class UniversalTTSPlugin(Star):
     def _get_engine_for_session(self, session_id: str) -> TTSEngine | None:
         """获取指定会话应使用的引擎（有绑定用绑定，否则用全局）"""
         if session_id and session_id in self._session_bindings:
-            # 检查缓存的引擎实例
-            if session_id in self._session_engines:
-                return self._session_engines[session_id]
-            # 创建引擎实例
             bound_name = self._session_bindings[session_id]
+            # 检查同名引擎是否已缓存，复用实例
+            if bound_name in self._cached_engines:
+                return self._cached_engines[bound_name]
+            # 创建新引擎实例并缓存
             ec = self._find_engine_config(bound_name)
             if ec:
                 try:
                     engine = get_engine(ec, self.config)
-                    self._session_engines[session_id] = engine
+                    self._cached_engines[bound_name] = engine
                     return engine
                 except Exception as e:
                     logger.error(f"[UniversalTTS] 会话绑定引擎创建失败 ({bound_name}): {e}")
@@ -485,20 +486,14 @@ class UniversalTTSPlugin(Star):
 
         instance_name = (target_config.get("instance_name") or "").strip() or target_config.get("__template_key", "")
 
-        # 验证引擎可以创建
+        # 验证引擎配置有效
         try:
-            engine = get_engine(target_config, self.config)
+            get_engine(target_config, self.config)
         except Exception as e:
             yield event.plain_result(f"创建引擎失败: {e}")
             return
 
-        # 关闭旧的会话引擎缓存
-        old_engine = self._session_engines.pop(session_id, None)
-        if old_engine:
-            await old_engine.close()
-
-        # 保存绑定
-        self._session_engines[session_id] = engine
+        # 保存绑定（引擎实例在首次使用时从 _cached_engines 复用）
         self._session_bindings[session_id] = instance_name
         self._save_bindings()
 
@@ -521,9 +516,7 @@ class UniversalTTSPlugin(Star):
             return
 
         old_name = self._session_bindings.pop(session_id)
-        old_engine = self._session_engines.pop(session_id, None)
-        if old_engine:
-            await old_engine.close()
+        # 不再关闭引擎实例，其他会话可能仍在复用
         self._save_bindings()
 
         logger.info(f"[UniversalTTS] 会话 {session_id[:20]}... 解除绑定 (原: {old_name})")
@@ -605,9 +598,10 @@ class UniversalTTSPlugin(Star):
             return
 
         count = len(self._session_bindings)
-        for engine in self._session_engines.values():
+        # 关闭所有被会话绑定了的缓存引擎
+        for engine in self._cached_engines.values():
             await engine.close()
-        self._session_engines.clear()
+        self._cached_engines.clear()
         self._session_bindings.clear()
         self._save_bindings()
 
@@ -670,7 +664,7 @@ class UniversalTTSPlugin(Star):
         """插件卸载时释放引擎资源"""
         if self._engine:
             await self._engine.close()
-        for engine in self._session_engines.values():
+        for engine in self._cached_engines.values():
             await engine.close()
-        self._session_engines.clear()
+        self._cached_engines.clear()
         logger.info("[UniversalTTS] 引擎资源已释放")
