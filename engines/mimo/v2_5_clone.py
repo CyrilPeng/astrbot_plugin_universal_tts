@@ -55,7 +55,7 @@ class MiMoV25CloneEngine(TTSEngine):
         resp = await client.post(
             url, headers={"api-key": self.api_key, "Content-Type": "application/json"}, json=payload
         )
-        resp.raise_for_status()
+        self._check_response("MiMo V2.5 VoiceClone", resp)
 
         data = resp.json()
         audio_data = data["choices"][0]["message"]["audio"]["data"]

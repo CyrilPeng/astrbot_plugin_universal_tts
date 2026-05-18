@@ -4,6 +4,8 @@ import base64
 from abc import ABC, abstractmethod
 from pathlib import Path
 
+import httpx
+
 
 class TTSEngine(ABC):
     """所有 TTS 引擎的抽象基类"""
@@ -21,6 +23,12 @@ class TTSEngine(ABC):
     async def close(self) -> None:
         """释放资源，子类可选实现"""
         pass
+
+    def _check_response(self, provider: str, response: httpx.Response) -> None:
+        """检查 HTTP 响应，错误时抛出详细异常"""
+        if response.status_code >= 400:
+            detail = response.text[:300]
+            raise RuntimeError(f"{provider} TTS 错误 [{response.status_code}]: {detail}")
 
     def _resolve_sample_path(self, sample_paths: list[str], sample_name: str = "") -> Path:
         """解析音色样本文件路径（共用逻辑）"""

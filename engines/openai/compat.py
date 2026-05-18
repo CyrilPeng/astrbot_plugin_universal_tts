@@ -50,7 +50,7 @@ class OpenAICompatEngine(TTSEngine):
         }
 
         response = await client.post(url, headers=headers, json=payload)
-        response.raise_for_status()
+        self._check_response("OpenAI 兼容", response)
 
         # OpenAI TTS 直接返回音频二进制流
         return response.content, self.audio_format

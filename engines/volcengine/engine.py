@@ -80,7 +80,7 @@ class VolcengineEngine(TTSEngine):
         response = await client.post(
             url, headers=headers, json=self._build_payload(text)
         )
-        response.raise_for_status()
+        self._check_response("火山引擎", response)
 
         data = response.json()
 

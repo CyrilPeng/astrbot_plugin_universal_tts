@@ -76,7 +76,7 @@ class MiMoV2Engine(TTSEngine):
         }
 
         response = await client.post(url, headers=headers, json=self._build_payload(text))
-        response.raise_for_status()
+        self._check_response("MiMo V2", response)
 
         data = response.json()
         choices = data.get("choices", [])
