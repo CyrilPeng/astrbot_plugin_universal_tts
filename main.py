@@ -301,9 +301,12 @@ class UniversalTTSPlugin(Star):
 
         # 收集所有文本
         text_parts = []
+        non_text_components = []  # 保留非文本组件
         for component in result.chain:
             if isinstance(component, Comp.Plain) and component.text:
                 text_parts.append(component.text)
+            else:
+                non_text_components.append(component)
 
         if not text_parts:
             return
@@ -343,12 +346,12 @@ class UniversalTTSPlugin(Star):
         audio_path.write_bytes(audio_bytes)
         self._cleanup_temp_files()
 
-        # 替换消息链为语音，缓存文本用于回复引用，同时记录日志
+        # 替换消息链为语音（语音组件 + 保留的非文本组件），缓存文本用于回复引用
         audio_path_str = str(audio_path)
         self._tts_audio_text[audio_path_str] = full_text
         self._last_tts_text[session_id] = full_text
         logger.info(f"[UniversalTTS] 发送语音 ({engine.instance_name}): {full_text[:80]}")
-        result.chain = [Comp.Record(file=str(audio_path), url=str(audio_path))]
+        result.chain = [Comp.Record(file=str(audio_path), url=str(audio_path))] + non_text_components
 
     @filter.on_waiting_llm_request()
     async def tts_reply_fix(self, event: AstrMessageEvent):
