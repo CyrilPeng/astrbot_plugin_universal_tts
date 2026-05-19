@@ -330,7 +330,7 @@ class UniversalTTSPlugin(Star):
         if self._session_bindings:
             logger.info(f"[UniversalTTS] 已加载 {len(self._session_bindings)} 个会话绑定")
 
-    @filter.on_decorating_result()
+    @filter.on_decorating_result(priority=999)
     async def tts_hook(self, event: AstrMessageEvent):
         """钩子：在消息发送前将文本转为语音"""
         if not self.config.get("enable", True):
