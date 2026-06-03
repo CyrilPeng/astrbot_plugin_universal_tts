@@ -8,7 +8,7 @@
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-blue?style=flat-square)](https://github.com/AstrBotDevs/AstrBot)
 [![License](https://img.shields.io/badge/License-AGPL--3.0-green?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.3.1-orange?style=flat-square)]()
+[![Version](https://img.shields.io/badge/Version-1.3.2-orange?style=flat-square)]()
 
 一个为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 打造的通用语音合成插件。
 支持多种引擎，覆盖国内外主流 TTS 服务，还能自定义接入任意 HTTP API。
@@ -57,7 +57,7 @@ https://github.com/CyrilPeng/astrbot_plugin_universal_tts
 1. 进入插件配置页
 2. 点击「TTS 引擎配置列表」添加引擎（按 `[提供商]` 分组）
 3. 填写 API Key 和参数
-4. 确保 AstrBot 的 TTS 功能已开启
+4. 确保需要接管的机器人已开启 AstrBot 的 TTS 功能；关闭 TTS 的机器人会保持文本输出
 
 > 💡 引擎列表中第一个为默认引擎，也可通过「当前生效的引擎实例名称」指定。
 

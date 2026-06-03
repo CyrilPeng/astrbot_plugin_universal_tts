@@ -4,7 +4,7 @@
     "type": "bool",
     "default": true,
     "obvious_hint": true,
-    "hint": "启用后插件会拦截 LLM 回复并自动转为语音发送。请关闭 AstrBot 内置 TTS 功能以避免冲突。"
+    "hint": "启用后插件会在 AstrBot 默认 TTS 开关开启时接管 LLM 回复并转为语音；关闭默认 TTS 的机器人不会被接管。"
   },
   "tts_probability": {
     "description": "TTS 触发概率（%）",

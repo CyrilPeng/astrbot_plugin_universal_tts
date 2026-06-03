@@ -14,6 +14,11 @@ from astrbot.api.star import Context, Star, register
 
 from .engines import get_engine, TTSEngine
 
+try:
+    from astrbot.core.star.session_llm_manager import SessionServiceManager
+except Exception:
+    SessionServiceManager = None
+
 
 DISABLED_ENGINE = "__disabled__"
 
@@ -89,7 +94,7 @@ def _get_event_user_ids(event: AstrMessageEvent) -> set[str]:
     "astrbot_plugin_universal_tts",
     "某不科学的高数",
     "通用 TTS 插件，支持多引擎切换，通过钩子拦截实现 TTS",
-    "1.3.1",
+    "1.3.2",
 )
 class UniversalTTSPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -178,6 +183,29 @@ class UniversalTTSPlugin(Star):
             return True
         logger.warning("[UniversalTTS] 已拒绝非管理员执行 TTS 管理命令")
         return False
+
+    async def _is_astrbot_tts_enabled(self, event: AstrMessageEvent) -> bool:
+        """对齐 AstrBot 内置 TTS 开关：全局和会话均启用时才接管。"""
+        try:
+            astrbot_config = (
+                getattr(self.context, "astrbot_config", None)
+                or getattr(self.context, "_config", None)
+            )
+            tts_settings = astrbot_config.get("provider_tts_settings", {}) if astrbot_config else {}
+            if not bool(tts_settings.get("enable", False)):
+                return False
+        except Exception as e:
+            logger.debug(f"[UniversalTTS] 读取 AstrBot TTS 全局开关失败，跳过接管: {e}")
+            return False
+
+        if SessionServiceManager is not None:
+            try:
+                return await SessionServiceManager.should_process_tts_request(event)
+            except Exception as e:
+                logger.debug(f"[UniversalTTS] 读取 AstrBot TTS 会话开关失败，跳过接管: {e}")
+                return False
+
+        return True
 
     def _cleanup_temp_files(self, force: bool = False):
         """清理插件生成的过期临时音频文件。"""
@@ -336,6 +364,8 @@ class UniversalTTSPlugin(Star):
         if not self.config.get("enable", True):
             return
         if not self._runtime_enabled:
+            return
+        if not await self._is_astrbot_tts_enabled(event):
             return
 
         # TTS 触发概率
@@ -641,6 +671,10 @@ class UniversalTTSPlugin(Star):
         if not _is_slash(event):
             return
         text = _get_cmd_args(event) or "你好，这是一条 TTS 测试消息。"
+
+        if not await self._is_astrbot_tts_enabled(event):
+            yield event.plain_result("AstrBot 默认 TTS 开关未开启，插件不会接管 TTS")
+            return
 
         session_id = _get_session_id(event)
         engine = self._get_engine_for_session(session_id)
