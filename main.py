@@ -1,5 +1,6 @@
 """通用 TTS 插件 - 通过钩子拦截消息，自行完成 TTS 合成"""
 
+import asyncio
 import inspect
 import json
 import random
@@ -90,18 +91,32 @@ def _get_event_user_ids(event: AstrMessageEvent) -> set[str]:
     return user_ids
 
 
+def _read_plugin_version(fallback: str = "0.0.0") -> str:
+    """从 metadata.yaml 读取版本号，避免 @register 中的版本与实际发布脱节。"""
+    try:
+        import yaml
+
+        meta_path = Path(__file__).with_name("metadata.yaml")
+        data = yaml.safe_load(meta_path.read_text(encoding="utf-8")) or {}
+        version = str(data.get("version") or "").strip().lstrip("vV")
+        if version:
+            return version
+    except Exception as e:
+        logger.debug(f"[UniversalTTS] 读取 metadata.yaml 版本号失败，回退到 {fallback}: {e}")
+    return fallback
+
+
 @register(
     "astrbot_plugin_universal_tts",
     "某不科学的高数",
     "通用 TTS 插件，支持多引擎切换，通过钩子拦截实现 TTS",
-    "1.3.2",
+    _read_plugin_version("1.3.3"),
 )
 class UniversalTTSPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
         self._engine: TTSEngine | None = None
-        self._session_engines: dict[str, TTSEngine] = {}  # [已弃用] session_id -> engine，保持兼容但已不使用
         self._cached_engines: dict[str, TTSEngine] = {}  # instance_name -> engine（同名引擎复用实例）
         self._session_bindings: dict[str, str] = {}  # session_id -> instance_name
         self._runtime_enabled = True
@@ -153,6 +168,39 @@ class UniversalTTSPlugin(Star):
             )
         except Exception as e:
             logger.error(f"[UniversalTTS] 保存运行状态失败: {e}")
+
+    async def _persist_config(self) -> None:
+        """把运行时对配置的修改写回配置文件。
+
+        AstrBotConfig 继承自 dict 且未重写 __setitem__，赋值只改内存，
+        必须显式保存，否则 /tts_switch、/tts_limit_* 的改动重启后会丢失。
+        """
+        try:
+            save_async = getattr(self.config, "save_config_async", None)
+            if callable(save_async):
+                await save_async()
+                return
+            save = getattr(self.config, "save_config", None)
+            if callable(save):
+                await asyncio.to_thread(save)
+        except Exception as e:
+            logger.error(f"[UniversalTTS] 保存插件配置失败: {e}")
+
+    def _prune_audio_text_cache(self, max_entries: int = 500) -> None:
+        """清理音频→文本缓存：丢弃文件已不存在的条目，并把总量限制在 max_entries 内。"""
+        if not self._tts_audio_text:
+            return
+        for path_str in list(self._tts_audio_text):
+            try:
+                if not Path(path_str).exists():
+                    self._tts_audio_text.pop(path_str, None)
+            except OSError:
+                self._tts_audio_text.pop(path_str, None)
+        overflow = len(self._tts_audio_text) - max_entries
+        if overflow > 0:
+            for path_str in list(self._tts_audio_text)[:overflow]:
+                self._tts_audio_text.pop(path_str, None)
+            logger.debug(f"[UniversalTTS] 音频文本缓存超限，已清理 {overflow} 条")
 
     async def _has_admin_permission(self, event: AstrMessageEvent) -> bool:
         """检查是否允许执行全局管理命令。"""
@@ -259,6 +307,8 @@ class UniversalTTSPlugin(Star):
 
         if removed:
             logger.info(f"[UniversalTTS] 已清理 {removed} 个临时音频文件")
+
+        self._prune_audio_text_cache()
 
     def _find_engine_config(self, name_or_idx: str) -> dict | None:
         """按序号或实例名查找引擎配置"""
@@ -421,9 +471,9 @@ class UniversalTTSPlugin(Star):
             )
             return
 
-        # 保存音频文件
+        # 保存音频文件（放线程池，避免阻塞事件循环）
         audio_path = self._temp_dir / f"tts_{uuid.uuid4().hex}.{fmt}"
-        audio_path.write_bytes(audio_bytes)
+        await asyncio.to_thread(audio_path.write_bytes, audio_bytes)
         self._cleanup_temp_files()
 
         # 替换消息链中的文本部分为语音，非文本组件保持原有顺序。
@@ -549,6 +599,7 @@ class UniversalTTSPlugin(Star):
                 await self._engine.close()
             self._engine = None
             self.config["active_engine"] = DISABLED_ENGINE
+            await self._persist_config()
             logger.info("[UniversalTTS] 已关闭全局默认 TTS")
             yield event.plain_result("已关闭全局默认 TTS。已绑定具体引擎的会话不受影响，使用 /tts_off 可暂停全部会话。")
             return
@@ -572,6 +623,7 @@ class UniversalTTSPlugin(Star):
         name = self._engine.instance_name
         # 同步更新配置中的 active_engine 字段
         self.config["active_engine"] = name
+        await self._persist_config()
         logger.info(f"[UniversalTTS] 已切换全局引擎: {name}")
         yield event.plain_result(f"已切换全局 TTS 引擎为: {name}")
 
@@ -685,7 +737,7 @@ class UniversalTTSPlugin(Star):
         try:
             audio_bytes, fmt = await engine.synthesize(text)
             audio_path = self._temp_dir / f"tts_test_{uuid.uuid4().hex}.{fmt}"
-            audio_path.write_bytes(audio_bytes)
+            await asyncio.to_thread(audio_path.write_bytes, audio_bytes)
             self._cleanup_temp_files()
             yield event.chain_result(
                 [Comp.Record(file=str(audio_path), url=str(audio_path))]
@@ -817,6 +869,7 @@ class UniversalTTSPlugin(Star):
             yield event.plain_result("权限不足：该命令仅管理员可用")
             return
         self.config["tts_text_limit_enable"] = True
+        await self._persist_config()
         limit = self.config.get("tts_text_limit", 50)
         yield event.plain_result(f"已开启 TTS 字数上限，当前上限: {limit} 字符")
 
@@ -829,6 +882,7 @@ class UniversalTTSPlugin(Star):
             yield event.plain_result("权限不足：该命令仅管理员可用")
             return
         self.config["tts_text_limit_enable"] = False
+        await self._persist_config()
         yield event.plain_result("已关闭 TTS 字数上限")
 
     @filter.command("tts_limit_set")
@@ -858,6 +912,7 @@ class UniversalTTSPlugin(Star):
             yield event.plain_result(f"无效的数字: {args}")
             return
         self.config["tts_text_limit"] = limit
+        await self._persist_config()
         yield event.plain_result(f"已设置 TTS 字数上限为: {limit} 字符")
 
     async def terminate(self):
