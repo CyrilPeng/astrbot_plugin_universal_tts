@@ -52,6 +52,8 @@
 https://github.com/CyrilPeng/astrbot_plugin_universal_tts
 ```
 
+> 需要 AstrBot `>= 4.11.0`（插件依赖 `on_waiting_llm_request` 钩子，该钩子自 4.11.0 起提供）。
+
 ## ⚙️ 配置
 
 1. 进入插件配置页
