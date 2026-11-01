@@ -24,6 +24,12 @@
     "default": 50,
     "hint": "超过此字数的回复将不转为语音（仅在启用字数上限时生效）。默认 50 个字符。"
   },
+  "fallback_to_text_on_send_error": {
+    "description": "语音发送失败时回退为文本",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，若语音消息发送失败（例如协议端无法编码语音），会自动改为发送原始文本，避免用户侧完全没有回复。关闭则只在日志中记录失败。"
+  },
   "temp_file_ttl_hours": {
     "description": "临时音频保留时间（小时）",
     "type": "int",

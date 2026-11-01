@@ -110,7 +110,7 @@ def _read_plugin_version(fallback: str = "0.0.0") -> str:
     "astrbot_plugin_universal_tts",
     "某不科学的高数",
     "通用 TTS 插件，支持多引擎切换，通过钩子拦截实现 TTS",
-    _read_plugin_version("1.3.3"),
+    _read_plugin_version("1.3.4"),
 )
 class UniversalTTSPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -482,6 +482,7 @@ class UniversalTTSPlugin(Star):
         self._last_tts_text[session_id] = full_text
         logger.info(f"[UniversalTTS] 发送语音 ({engine.instance_name}): {full_text[:80]}")
         record = Comp.Record(file=audio_path_str, url=audio_path_str)
+        original_chain = list(result.chain)
         new_chain = []
         inserted_record = False
         for component in result.chain:
@@ -492,6 +493,57 @@ class UniversalTTSPlugin(Star):
                 continue
             new_chain.append(component)
         result.chain = new_chain
+        self._install_send_fallback(event, result, original_chain)
+
+    def _install_send_fallback(
+        self, event: AstrMessageEvent, result, original_chain: list
+    ) -> None:
+        """包装 event.send：语音发送失败时改发原始文本。
+
+        AstrBot 的 respond 阶段用 try/except 包住 event.send 且只写日志，
+        发送失败时用户侧完全静默。这里在事件实例上包一层，失败时补发文本，
+        成功时行为与原来完全一致。
+        """
+        if not self.config.get("fallback_to_text_on_send_error", True):
+            return
+
+        original_send = getattr(event, "send", None)
+        if not callable(original_send):
+            return
+        if getattr(event, "_universal_tts_send_wrapped", False):
+            return
+
+        try:
+            fallback_chain = result.derive(list(original_chain))
+        except Exception as e:
+            logger.debug(f"[UniversalTTS] 构造文本回退链失败，跳过回退: {e}")
+            return
+
+        state = {"used": False}
+
+        async def _send_with_fallback(chain):
+            try:
+                return await original_send(chain)
+            except Exception as e:
+                logger.error(
+                    f"[UniversalTTS] 语音发送失败，回退为文本: {type(e).__name__}: {e}"
+                )
+                if state["used"]:
+                    raise
+                state["used"] = True
+                try:
+                    return await original_send(fallback_chain)
+                except Exception as e2:
+                    logger.error(
+                        f"[UniversalTTS] 文本回退同样失败: {type(e2).__name__}: {e2}"
+                    )
+                    raise
+
+        try:
+            event.send = _send_with_fallback
+            event._universal_tts_send_wrapped = True
+        except Exception as e:
+            logger.debug(f"[UniversalTTS] 安装发送回退失败，已忽略: {e}")
 
     @filter.on_waiting_llm_request()
     async def tts_reply_fix(self, event: AstrMessageEvent):
