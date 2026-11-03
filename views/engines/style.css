@@ -374,6 +374,63 @@ input[type="checkbox"] {
   width: 16px;
 }
 
+.badge-danger {
+  background: var(--danger);
+  color: #ffffff;
+}
+
+/* 标签页 */
+
+.tabs {
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 2px;
+  margin-bottom: 16px;
+}
+
+.tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 500;
+  margin-bottom: -1px;
+  padding: 8px 14px;
+  transition: color 0.15s ease;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab-active {
+  border-bottom-color: var(--primary);
+  color: var(--primary);
+}
+
+/* hidden 必须能压住一切 display 声明，否则标签页/横幅会一直显示 */
+[hidden] {
+  display: none !important;
+}
+
+.panel-head {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.panel-head .muted {
+  margin: 0;
+}
+
+.row-name-input {
+  width: 100%;
+}
+
 @media (max-width: 560px) {
   .page-head {
     flex-direction: column;

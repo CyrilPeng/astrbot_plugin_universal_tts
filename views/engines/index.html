@@ -13,15 +13,55 @@
           <h1 id="page-title">通用 TTS 管理</h1>
           <p id="page-desc" class="muted"></p>
         </div>
-        <button id="btn-new" class="btn btn-primary" type="button">新建引擎</button>
       </header>
 
       <div id="banner" class="banner" hidden></div>
       <div id="notice" class="banner banner-info" hidden></div>
       <audio id="player" class="player" controls hidden></audio>
 
-      <div id="list" class="list" role="list"></div>
-      <p id="empty" class="empty" hidden></p>
+      <nav class="tabs" role="tablist">
+        <button
+          id="tab-engines-btn"
+          class="tab tab-active"
+          type="button"
+          role="tab"
+          data-tab="engines"
+        >
+          引擎
+        </button>
+        <button id="tab-samples-btn" class="tab" type="button" role="tab" data-tab="samples">
+          音色样本
+        </button>
+        <button id="tab-settings-btn" class="tab" type="button" role="tab" data-tab="settings">
+          全局设置
+        </button>
+      </nav>
+
+      <section id="tab-engines" class="tab-panel" role="tabpanel">
+        <div class="panel-head">
+          <p id="engines-hint" class="muted"></p>
+          <button id="btn-new" class="btn btn-primary" type="button">新建引擎</button>
+        </div>
+        <div id="list" class="list" role="list"></div>
+        <p id="empty" class="empty" hidden></p>
+      </section>
+
+      <section id="tab-samples" class="tab-panel" role="tabpanel" hidden>
+        <div class="panel-head">
+          <p id="samples-hint" class="muted"></p>
+          <button id="btn-upload-sample" class="btn btn-primary" type="button">上传样本</button>
+        </div>
+        <div id="samples-list" class="list" role="list"></div>
+        <p id="samples-empty" class="empty" hidden></p>
+      </section>
+
+      <section id="tab-settings" class="tab-panel" role="tabpanel" hidden>
+        <div class="panel-head">
+          <p id="settings-hint" class="muted"></p>
+          <button id="btn-save-settings" class="btn btn-primary" type="button">保存设置</button>
+        </div>
+        <div id="settings-fields" class="fields"></div>
+      </section>
     </div>
 
     <dialog id="confirm" class="editor confirm">

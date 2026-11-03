@@ -8,7 +8,7 @@
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-blue?style=flat-square)](https://github.com/AstrBotDevs/AstrBot)
 [![License](https://img.shields.io/badge/License-AGPL--3.0-green?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.3.6-orange?style=flat-square)]()
+[![Version](https://img.shields.io/badge/Version-1.3.7-orange?style=flat-square)]()
 
 一个为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 打造的通用语音合成插件。
 支持多种引擎，覆盖国内外主流 TTS 服务，还能自定义接入任意 HTTP API。
@@ -23,7 +23,7 @@
 - 🔄 **热切换** — 运行时可一条指令切换引擎，无需手动进入后台重启
 - 🌍 **多引擎覆盖** — MiMo · OpenAI · 火山引擎 · 阿里云 · Azure · ElevenLabs
 - 🛠️ **万能适配** — 自定义 HTTP 引擎，模板化接入任何 TTS API
-- 🎨 **WebUI 引擎管理** — 插件详情页内置管理视图，支持试听、样本上传、一键复制，保存即生效
+- 🎨 **WebUI 完整管理页** — 插件详情页内置三标签视图：引擎增删改查与试听、音色样本上传/下载/重命名、全局设置，保存即生效
 
 ---
 
@@ -52,7 +52,7 @@
 https://github.com/CyrilPeng/astrbot_plugin_universal_tts
 ```
 
-> 需要 AstrBot `>= 4.25.0`。插件依赖 `on_waiting_llm_request` 钩子（4.11.0+）与插件 Web API `register_web_api`（4.25.0+，用于 WebUI 引擎管理页）。旧版本请使用 v1.3.4。
+> 需要 AstrBot `>= 4.25.0`。插件依赖 `on_waiting_llm_request` 钩子（4.11.0+）与插件 Web API `register_web_api`（4.25.0+，用于 WebUI 管理页）。旧版本请使用 v1.3.4。
 
 ## ⚙️ 配置
 

@@ -13,6 +13,7 @@ const state = {
   disabled_engine: "__disabled__",
   templates: {},
   samples: [],
+  settings: null,
   plugin_enabled: null,
   global_tts_enabled: null,
 };
@@ -155,6 +156,42 @@ function applyPayload(data) {
 /* 音频预览                                                            */
 /* ------------------------------------------------------------------ */
 
+const PREVIEW_POLL_INTERVAL = 800;
+const PREVIEW_POLL_MAX = 90;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * 轮询试听任务结果。
+ *
+ * 后端把合成放到后台任务里，这里只发短请求 —— 因为视图经由反向代理访问，
+ * 单个请求挂太久会被中间层以 524 掐断（实测不到 30 秒就会发生）。
+ */
+async function waitForPreview(jobId) {
+  let lastError = null;
+  for (let attempt = 0; attempt < PREVIEW_POLL_MAX; attempt += 1) {
+    await sleep(attempt === 0 ? 300 : PREVIEW_POLL_INTERVAL);
+    let data = null;
+    try {
+      data = await bridge.apiGet("engines/test/result", { job_id: jobId });
+    } catch (error) {
+      // 单次查询抖动不该让整次试听失败，继续轮询
+      lastError = error;
+      continue;
+    }
+    lastError = null;
+    if (!data) continue;
+    if (data.status === "done") return data;
+    if (data.status === "error") {
+      throw new Error(data.error || t("preview_failed", "试听失败"));
+    }
+  }
+  if (lastError) throw lastError;
+  throw new Error(t("preview_timeout", "试听超时，请稍后重试"));
+}
+
 async function runPreview(payload, button) {
   const original = button.textContent;
   button.disabled = true;
@@ -162,8 +199,13 @@ async function runPreview(payload, button) {
   setEditorError("");
   setBanner("");
   try {
-    const data = await bridge.apiPost("engines/test", payload);
-    if (!data || !data.audio) {
+    const started = await bridge.apiPost("engines/test", payload);
+    const jobId = started && started.job_id;
+    if (!jobId) {
+      throw new Error(t("preview_empty", "试听任务提交失败"));
+    }
+    const data = await waitForPreview(jobId);
+    if (!data.audio) {
       throw new Error(t("preview_empty", "引擎没有返回音频"));
     }
     if (data.playable === false) {
@@ -187,7 +229,7 @@ async function runPreview(payload, button) {
     setBanner(
       t("preview_ok", "试听成功（{fmt} · {ms} ms · {kb} KB）", {
         fmt: data.format || "?",
-        ms: data.elapsed_ms || 0,
+        ms: data.took_ms || data.elapsed_ms || 0,
         kb: Math.max(1, Math.round((data.bytes || 0) / 1024)),
       }),
       "ok",
@@ -509,25 +551,12 @@ function renderSampleField(key, spec, value) {
     select.appendChild(option);
   }
   row.appendChild(select);
-
-  const uploadBtn = makeButton(t("sample_upload", "上传"), "btn", () => {
-    pickFile(async (file) => {
-      await uploadSample(file, uploadBtn);
-    });
-  });
-  row.appendChild(uploadBtn);
-
-  const deleteBtn = makeButton(t("sample_delete", "删除"), "btn btn-danger", () => {
-    deleteSample(select.value);
-  });
-  row.appendChild(deleteBtn);
-
   wrap.appendChild(row);
 
   const hint = document.createElement("span");
   hint.className = "field-hint";
   hint.textContent =
-    spec.hint || t("sample_hint", "可上传 mp3 / wav 样本；选择后该引擎将使用它克隆音色。");
+    spec.hint || t("sample_hint", "样本文件请在「音色样本」页上传、下载、重命名或删除。");
   wrap.appendChild(hint);
 
   return wrap;
@@ -551,55 +580,78 @@ function pickFile(onPicked) {
   fileInput.click();
 }
 
-async function uploadSample(file, button) {
+async function uploadSampleFile(file) {
   if (!/\.(mp3|wav)$/i.test(file.name || "")) {
-    setEditorError(t("sample_bad_ext", "仅支持 mp3 / wav 文件"));
+    setBanner(t("sample_bad_ext", "仅支持 mp3 / wav 文件"), "error");
     return;
   }
-  const original = button.textContent;
-  button.disabled = true;
-  button.textContent = t("uploading", "上传中…");
-  setEditorError("");
+  els.btnUploadSample.disabled = true;
+  setBanner(t("uploading", "上传中…"), "info");
   try {
     const data = await bridge.upload("samples/upload", file);
     state.samples = Array.isArray(data.samples) ? data.samples : state.samples;
-    editing.draft = Object.assign(collectDraft(), {
-      voice_sample_name: data.name || "",
-    });
-    renderEditor();
+    renderSamples();
     setBanner(t("sample_uploaded", "已上传样本 {name}", { name: data.name }), "ok");
   } catch (error) {
-    setEditorError(error && error.message ? error.message : String(error));
+    setBanner(error && error.message ? error.message : String(error), "error");
   } finally {
-    button.disabled = false;
-    button.textContent = original;
+    els.btnUploadSample.disabled = false;
   }
 }
 
-async function deleteSample(name) {
-  if (!name) {
-    setEditorError(t("sample_pick_first", "请先选择一个样本"));
+async function downloadSample(sample) {
+  try {
+    await bridge.download("samples/download", { path: sample.path }, sample.name);
+  } catch (error) {
+    setBanner(error && error.message ? error.message : String(error), "error");
+  }
+}
+
+async function renameSample(sample, rawName) {
+  const next = String(rawName || "").trim();
+  if (!next || next === sample.name) {
+    renamingPath = null;
+    renderSamples();
     return;
   }
-  const sample = state.samples.find((item) => item.name === name);
-  if (!sample) {
-    setEditorError(t("sample_pick_first", "请先选择一个样本"));
-    return;
+  try {
+    const data = await bridge.apiPost("samples/rename", {
+      path: sample.path,
+      new_name: next,
+    });
+    state.samples = Array.isArray(data.samples) ? data.samples : state.samples;
+    renamingPath = null;
+    renderSamples();
+    const refs = Number(data.renamed_refs || 0);
+    setBanner(
+      refs > 0
+        ? t("sample_renamed_refs", "已重命名为 {name}，并同步更新 {count} 个引擎", {
+            name: data.name,
+            count: refs,
+          })
+        : t("sample_renamed", "已重命名为 {name}", { name: data.name }),
+      "ok",
+    );
+    await loadEngines();
+  } catch (error) {
+    setBanner(error && error.message ? error.message : String(error), "error");
   }
+}
+
+async function deleteSampleEntry(sample) {
   const ok = await askConfirm(
-    t("sample_confirm_delete", "确定删除样本「{name}」？", { name }),
+    t("sample_confirm_delete", "确定删除样本「{name}」？", { name: sample.name }),
     t("delete", "删除"),
   );
   if (!ok) return;
-  setEditorError("");
   try {
     const data = await bridge.apiPost("samples/delete", { path: sample.path });
     state.samples = Array.isArray(data.samples) ? data.samples : [];
-    editing.draft = Object.assign(collectDraft(), { voice_sample_name: "" });
-    renderEditor();
-    setBanner(t("sample_deleted", "已删除样本 {name}", { name }), "ok");
+    renderSamples();
+    setBanner(t("sample_deleted", "已删除样本 {name}", { name: sample.name }), "ok");
+    await loadEngines();
   } catch (error) {
-    setEditorError(error && error.message ? error.message : String(error));
+    setBanner(error && error.message ? error.message : String(error), "error");
   }
 }
 
@@ -736,6 +788,266 @@ async function saveEditor() {
 /* 初始化                                                              */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* 标签页                                                              */
+/* ------------------------------------------------------------------ */
+
+const TABS = ["engines", "samples", "settings"];
+let currentTab = "engines";
+let renamingPath = null;
+
+function formatSize(bytes) {
+  const size = Number(bytes || 0);
+  if (!size || size <= 0) return "0 B";
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function switchTab(name) {
+  if (!TABS.includes(name)) return;
+  currentTab = name;
+  const map = {
+    engines: [els.tabEnginesBtn, els.tabEngines],
+    samples: [els.tabSamplesBtn, els.tabSamples],
+    settings: [els.tabSettingsBtn, els.tabSettings],
+  };
+  for (const [key, pair] of Object.entries(map)) {
+    const active = key === name;
+    pair[0].classList.toggle("tab-active", active);
+    pair[0].setAttribute("aria-selected", active ? "true" : "false");
+    pair[1].hidden = !active;
+  }
+  setBanner("");
+  if (name === "samples") {
+    await loadSamples();
+    renderSamples();
+  } else if (name === "settings") {
+    await loadSettings();
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 音色样本                                                            */
+/* ------------------------------------------------------------------ */
+
+function renderSamples() {
+  const list = els.samplesList;
+  list.innerHTML = "";
+  if (!state.samples.length) {
+    els.samplesEmpty.hidden = false;
+    els.samplesEmpty.textContent = t(
+      "samples_empty",
+      "还没有样本文件，先上传一个 mp3 或 wav。",
+    );
+    return;
+  }
+  els.samplesEmpty.hidden = true;
+  state.samples.forEach((sample) => list.appendChild(renderSampleRow(sample)));
+}
+
+function renderSampleRow(sample) {
+  const row = document.createElement("div");
+  row.className = "row";
+  row.setAttribute("role", "listitem");
+
+  const main = document.createElement("div");
+  main.className = "row-main";
+
+  if (renamingPath === sample.path) {
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "row-name-input";
+    input.value = sample.name;
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        renameSample(sample, input.value);
+      } else if (event.key === "Escape") {
+        renamingPath = null;
+        renderSamples();
+      }
+    });
+    main.appendChild(input);
+
+    const actions = document.createElement("div");
+    actions.className = "row-actions";
+    actions.appendChild(
+      makeButton(t("save", "保存"), "btn btn-primary", () => renameSample(sample, input.value)),
+    );
+    actions.appendChild(
+      makeButton(t("cancel", "取消"), "btn", () => {
+        renamingPath = null;
+        renderSamples();
+      }),
+    );
+    row.appendChild(main);
+    row.appendChild(actions);
+    setTimeout(() => input.focus(), 0);
+    return row;
+  }
+
+  const name = document.createElement("div");
+  name.className = "row-name";
+  const nameText = document.createElement("span");
+  nameText.className = "row-name-text";
+  nameText.textContent = sample.name;
+  name.appendChild(nameText);
+  if (!sample.exists) {
+    const badge = document.createElement("span");
+    badge.className = "badge badge-danger";
+    badge.textContent = t("sample_missing", "文件缺失");
+    name.appendChild(badge);
+  }
+  main.appendChild(name);
+
+  const meta = document.createElement("div");
+  meta.className = "row-meta";
+  const refs = Array.isArray(sample.referenced_by) ? sample.referenced_by : [];
+  const bits = [formatSize(sample.size)];
+  if (refs.length) {
+    bits.push(
+      t("sample_used_by", "被 {count} 个引擎引用：{names}", {
+        count: refs.length,
+        names: refs.join("、"),
+      }),
+    );
+  } else {
+    bits.push(t("sample_unused", "未被任何引擎引用"));
+  }
+  meta.textContent = bits.join(" · ");
+  main.appendChild(meta);
+
+  row.appendChild(main);
+
+  const actions = document.createElement("div");
+  actions.className = "row-actions";
+  actions.appendChild(makeButton(t("download", "下载"), "btn", () => downloadSample(sample)));
+  actions.appendChild(
+    makeButton(t("rename", "重命名"), "btn", () => {
+      renamingPath = sample.path;
+      renderSamples();
+    }),
+  );
+  actions.appendChild(
+    makeButton(t("delete", "删除"), "btn btn-danger", () => deleteSampleEntry(sample)),
+  );
+  row.appendChild(actions);
+  return row;
+}
+
+/* ------------------------------------------------------------------ */
+/* 全局设置                                                            */
+/* ------------------------------------------------------------------ */
+
+async function loadSettings() {
+  els.settingsFields.innerHTML = "";
+  try {
+    const data = await bridge.apiGet("settings");
+    state.settings = data;
+    renderSettings();
+  } catch (error) {
+    setBanner(error && error.message ? error.message : String(error), "error");
+  }
+}
+
+function renderSettings() {
+  const container = els.settingsFields;
+  container.innerHTML = "";
+  const data = state.settings;
+  if (!data || !Array.isArray(data.fields)) return;
+  const secrets = new Set(Array.isArray(data.secrets) ? data.secrets : []);
+  data.fields.forEach((field) => {
+    container.appendChild(renderSettingField(field, secrets.has(field.key)));
+  });
+}
+
+function renderSettingField(field, secretIsSet) {
+  const wrap = document.createElement("div");
+  wrap.className = "field";
+
+  const label = document.createElement("span");
+  label.className = "field-label";
+  label.textContent = field.description || field.key;
+  wrap.appendChild(label);
+
+  const type = String(field.type || "string");
+  const options = Array.isArray(field.options) ? field.options : [];
+  let input;
+
+  if (type === "bool") {
+    input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = Boolean(field.value);
+  } else if (type === "int" || type === "float") {
+    input = document.createElement("input");
+    input.type = "number";
+    input.step = type === "int" ? "1" : "any";
+    input.value =
+      field.value === null || field.value === undefined ? "" : String(field.value);
+  } else if (type === "list") {
+    input = document.createElement("textarea");
+    input.rows = 4;
+    input.value = Array.isArray(field.value)
+      ? field.value.join("\n")
+      : String(field.value || "");
+  } else if (options.length) {
+    input = document.createElement("select");
+    options.forEach((option) => {
+      const opt = document.createElement("option");
+      opt.value = String(option);
+      opt.textContent = String(option);
+      if (String(field.value) === String(option)) opt.selected = true;
+      input.appendChild(opt);
+    });
+  } else {
+    input = document.createElement("input");
+    input.type = "text";
+    input.value =
+      field.value === null || field.value === undefined ? "" : String(field.value);
+  }
+
+  input.name = field.key;
+  wrap.appendChild(input);
+
+  const hintText = secretIsSet
+    ? t("settings_secret_set", "已设置；留空表示保持不变。")
+    : field.hint || "";
+  if (hintText) {
+    const hint = document.createElement("span");
+    hint.className = "field-hint";
+    hint.textContent = hintText;
+    wrap.appendChild(hint);
+  }
+  return wrap;
+}
+
+async function saveSettings() {
+  const values = {};
+  const fields = (state.settings && state.settings.fields) || [];
+  for (const field of fields) {
+    const input = els.settingsFields.querySelector(`[name="${CSS.escape(field.key)}"]`);
+    if (!input) continue;
+    values[field.key] = field.type === "bool" ? Boolean(input.checked) : input.value;
+  }
+
+  els.btnSaveSettings.disabled = true;
+  const original = els.btnSaveSettings.textContent;
+  els.btnSaveSettings.textContent = t("saving", "保存中…");
+  try {
+    const data = await bridge.apiPost("settings/save", { values });
+    state.settings = data;
+    renderSettings();
+    setBanner(t("settings_saved", "设置已保存并即时生效"), "ok");
+    await loadEngines();
+  } catch (error) {
+    setBanner(error && error.message ? error.message : String(error), "error");
+  } finally {
+    els.btnSaveSettings.disabled = false;
+    els.btnSaveSettings.textContent = original;
+  }
+}
+
 function bindEvents() {
   els.btnNew.addEventListener("click", () => openEditor(null));
   els.btnCancel.addEventListener("click", () => els.editor.close());
@@ -770,6 +1082,15 @@ function bindEvents() {
   els.confirm.addEventListener("click", (event) => {
     if (event.target === els.confirm) settleConfirm(false);
   });
+
+  els.tabEnginesBtn.addEventListener("click", () => switchTab("engines"));
+  els.tabSamplesBtn.addEventListener("click", () => switchTab("samples"));
+  els.tabSettingsBtn.addEventListener("click", () => switchTab("settings"));
+
+  els.btnUploadSample.addEventListener("click", () => {
+    pickFile((file) => uploadSampleFile(file));
+  });
+  els.btnSaveSettings.addEventListener("click", () => saveSettings());
 }
 
 async function main() {
@@ -800,6 +1121,20 @@ async function main() {
     confirmMessage: byId("confirm-message"),
     confirmOk: byId("confirm-ok"),
     confirmCancel: byId("confirm-cancel"),
+    tabEnginesBtn: byId("tab-engines-btn"),
+    tabSamplesBtn: byId("tab-samples-btn"),
+    tabSettingsBtn: byId("tab-settings-btn"),
+    tabEngines: byId("tab-engines"),
+    tabSamples: byId("tab-samples"),
+    tabSettings: byId("tab-settings"),
+    enginesHint: byId("engines-hint"),
+    samplesList: byId("samples-list"),
+    samplesEmpty: byId("samples-empty"),
+    samplesHint: byId("samples-hint"),
+    btnUploadSample: byId("btn-upload-sample"),
+    settingsFields: byId("settings-fields"),
+    settingsHint: byId("settings-hint"),
+    btnSaveSettings: byId("btn-save-settings"),
   });
 
   bindEvents();
@@ -810,15 +1145,33 @@ async function main() {
   byId("page-title").textContent = title;
   byId("page-desc").textContent = t(
     "description",
-    "在这里增删改查引擎实例，改动保存后立即生效，无需重启 AstrBot。",
+    "引擎、音色样本与全局设置的统一管理界面，改动保存后立即生效。",
   );
   els.btnNew.textContent = t("new", "新建引擎");
   els.btnSave.textContent = t("save", "保存");
   els.btnCancel.textContent = t("cancel", "取消");
   els.btnPreview.textContent = t("preview", "试听");
+  els.tabEnginesBtn.textContent = t("tab_engines", "引擎");
+  els.tabSamplesBtn.textContent = t("tab_samples", "音色样本");
+  els.tabSettingsBtn.textContent = t("tab_settings", "全局设置");
+  els.btnUploadSample.textContent = t("sample_upload", "上传样本");
+  els.btnSaveSettings.textContent = t("settings_save", "保存设置");
+  els.enginesHint.textContent = t(
+    "engines_hint",
+    "把任意引擎设为默认，它就会接管全部会话。",
+  );
+  els.samplesHint.textContent = t(
+    "samples_hint",
+    "音色克隆用的参考音频，支持 mp3 / wav。",
+  );
+  els.settingsHint.textContent = t(
+    "settings_hint",
+    "这里的改动直接写入插件配置，保存后立即生效。",
+  );
   document.title = title;
 
   await loadEngines();
+  await loadSamples();
 
   if (bridge.onContext) {
     bridge.onContext(() => {

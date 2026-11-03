@@ -29,6 +29,12 @@ try:
 except Exception:  # pragma: no cover - 旧版本 AstrBot
     error_response = json_response = request = None
 
+# file_response 单独导入：个别版本可能还没有它，不能因为它在而拖垮上面整组 API
+try:
+    from astrbot.api.web import file_response
+except Exception:  # pragma: no cover - 旧版本 AstrBot
+    file_response = None
+
 
 PLUGIN_NAME = "astrbot_plugin_universal_tts"
 
@@ -49,6 +55,11 @@ DISABLED_ENGINE = "__disabled__"
 PREVIEW_TEXT = "你好，这是一段音色试听。"
 # 试听音频上限，超过则拒绝回传（base64 会再膨胀 4/3）
 PREVIEW_MAX_BYTES = 4 * 1024 * 1024
+# 单次试听的硬超时：超时即判失败，避免请求无限挂起被网关掐断
+PREVIEW_TIMEOUT = 60
+# 试听任务结果的保留时长与数量上限
+PREVIEW_JOB_TTL = 300
+PREVIEW_MAX_JOBS = 20
 # 单个样本文件上限
 SAMPLE_MAX_BYTES = 20 * 1024 * 1024
 # 允许的样本扩展名（与 _conf_schema.json 的 file_types 保持一致）
@@ -156,7 +167,7 @@ def _read_plugin_version(fallback: str = "0.0.0") -> str:
     "astrbot_plugin_universal_tts",
     "某不科学的高数",
     "通用 TTS 插件，支持多引擎切换，通过钩子拦截实现 TTS",
-    _read_plugin_version("1.3.6"),
+    _read_plugin_version("1.3.7"),
 )
 class UniversalTTSPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -179,6 +190,8 @@ class UniversalTTSPlugin(Star):
         # WebUI（插件可视化视图）相关
         self._context = context
         self._templates_cache: dict | None = None
+        self._schema_cache: dict | None = None
+        self._preview_jobs: dict[str, dict] = {}
         self._register_web_apis()
 
     def _load_bindings(self):
@@ -1042,10 +1055,15 @@ class UniversalTTSPlugin(Star):
             (f"{prefix}/engines/clone", self.web_clone_engine, ["POST"], "复制引擎实例"),
             (f"{prefix}/engines/delete", self.web_delete_engine, ["POST"], "删除引擎实例"),
             (f"{prefix}/engines/activate", self.web_activate_engine, ["POST"], "设置默认引擎"),
-            (f"{prefix}/engines/test", self.web_test_engine, ["POST"], "试听引擎合成效果"),
+            (f"{prefix}/engines/test", self.web_test_engine, ["POST"], "提交试听任务"),
+            (f"{prefix}/engines/test/result", self.web_test_result, ["GET"], "查询试听结果"),
             (f"{prefix}/samples", self.web_list_samples, ["GET"], "列出音色样本文件"),
             (f"{prefix}/samples/upload", self.web_upload_sample, ["POST"], "上传音色样本文件"),
+            (f"{prefix}/samples/download", self.web_download_sample, ["GET"], "下载音色样本文件"),
+            (f"{prefix}/samples/rename", self.web_rename_sample, ["POST"], "重命名音色样本文件"),
             (f"{prefix}/samples/delete", self.web_delete_sample, ["POST"], "删除音色样本文件"),
+            (f"{prefix}/settings", self.web_get_settings, ["GET"], "读取全局设置"),
+            (f"{prefix}/settings/save", self.web_save_settings, ["POST"], "保存全局设置"),
         )
         for route, handler, methods, desc in apis:
             try:
@@ -1375,11 +1393,13 @@ class UniversalTTSPlugin(Star):
     # ------------------------------------------------------------------
 
     async def web_test_engine(self):
-        """合成一小段试听音频并返回 base64 data URI。
+        """提交一次试听任务，立即返回 job_id。
 
-        支持两种用法：
-        - ``{index: n}``：试听已保存的引擎
-        - ``{index?: n, engine: {...}}``：试听编辑器里的草稿，无需先保存
+        ``{index: n}`` 试听已保存的引擎；``{index?: n, engine: {...}}`` 试听编辑器
+        里的草稿。合成放到后台任务里做，由前端轮询 ``engines/test/result`` 取结果。
+
+        之所以不在这里同步等待：视图经由反向代理访问，单个请求挂太久会被
+        中间层直接掐断并返回 524（实测不到 30 秒就会发生），拆成短请求更稳。
         """
         payload = await request.json(default={}) or {}
         raw_engines = self._list_engines()
@@ -1411,14 +1431,67 @@ class UniversalTTSPlugin(Star):
         else:
             return error_response("需要提供 index 或 engine 参数")
 
+        self._prune_preview_jobs()
+        job_id = uuid.uuid4().hex
+        self._preview_jobs[job_id] = {"status": "pending", "created": time.time()}
+        asyncio.create_task(self._run_preview_job(job_id, engine_config))
+        logger.debug(f"[UniversalTTS] 试听任务已提交: {job_id}")
+        return json_response({"job_id": job_id})
+
+    async def web_test_result(self):
+        """轮询试听任务的结果。"""
+        job_id = str(request.query.get("job_id", "") or "").strip()
+        if not job_id:
+            return error_response("缺少 job_id 参数")
+        job = self._preview_jobs.get(job_id)
+        if job is None:
+            return error_response("试听任务不存在或已过期，请重试")
+        result = {
+            "status": job.get("status", "pending"),
+            "elapsed_ms": int((time.time() - job.get("created", time.time())) * 1000),
+        }
+        for key in ("audio", "format", "bytes", "playable", "text", "error", "took_ms"):
+            if key in job:
+                result[key] = job[key]
+        return json_response(result)
+
+    def _prune_preview_jobs(self) -> None:
+        """清掉过期任务，并保证任务表不会无限增长。"""
+        now = time.time()
+        for key in [
+            k
+            for k, v in self._preview_jobs.items()
+            if now - v.get("created", now) > PREVIEW_JOB_TTL
+        ]:
+            self._preview_jobs.pop(key, None)
+        while len(self._preview_jobs) >= PREVIEW_MAX_JOBS:
+            oldest = min(
+                self._preview_jobs, key=lambda k: self._preview_jobs[k].get("created", 0)
+            )
+            self._preview_jobs.pop(oldest, None)
+
+    async def _run_preview_job(self, job_id: str, engine_config: dict) -> None:
+        job = self._preview_jobs.get(job_id)
+        if job is None:
+            return
+
         engine = None
         started = time.monotonic()
         try:
             engine = get_engine(engine_config, self.config)
-            audio, audio_format = await engine.synthesize(PREVIEW_TEXT)
+            audio, audio_format = await asyncio.wait_for(
+                engine.synthesize(PREVIEW_TEXT), timeout=PREVIEW_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            job.update(
+                status="error",
+                error=f"合成超时（超过 {PREVIEW_TIMEOUT} 秒），请检查接口状态或网络",
+            )
+            return
         except Exception as e:
             logger.warning(f"[UniversalTTS] 试听合成失败: {e}")
-            return error_response(f"试听失败: {e}")
+            job.update(status="error", error=self._friendly_engine_error(e))
+            return
         finally:
             if engine is not None:
                 try:
@@ -1427,31 +1500,58 @@ class UniversalTTSPlugin(Star):
                     pass
 
         if not audio:
-            return error_response("试听失败：引擎返回了空音频")
+            job.update(status="error", error="引擎返回了空音频")
+            return
         if len(audio) > PREVIEW_MAX_BYTES:
-            return error_response(
-                f"试听音频过大（{len(audio)} 字节），超过 {PREVIEW_MAX_BYTES} 字节上限"
+            job.update(
+                status="error",
+                error=f"试听音频过大（{len(audio)} 字节），超过 {PREVIEW_MAX_BYTES} 字节上限",
             )
+            return
 
         fmt = str(audio_format or "").strip().lower().lstrip(".")
-        mime = _AUDIO_MIME.get(fmt, "application/octet-stream")
-        return json_response(
-            {
-                "audio": f"data:{mime};base64,{base64.b64encode(audio).decode('ascii')}",
-                "format": fmt,
-                "bytes": len(audio),
-                "elapsed_ms": int((time.monotonic() - started) * 1000),
-                "playable": fmt in _PLAYABLE_FORMATS,
-                "text": PREVIEW_TEXT,
-            }
+        job.update(
+            status="done",
+            audio=(
+                f"data:{_AUDIO_MIME.get(fmt, 'application/octet-stream')};base64,"
+                f"{base64.b64encode(audio).decode('ascii')}"
+            ),
+            format=fmt,
+            bytes=len(audio),
+            playable=fmt in _PLAYABLE_FORMATS,
+            text=PREVIEW_TEXT,
+            took_ms=int((time.monotonic() - started) * 1000),
         )
+
+    @staticmethod
+    def _friendly_engine_error(exc: Exception) -> str:
+        """把常见的上游接口错误翻译成人话。"""
+        message = str(exc).strip() or type(exc).__name__
+        low = message.lower()
+        if "429" in message or "too many requests" in low or "rate limit" in low:
+            return "接口返回 429 限流。试听与实际发送共用同一配额，请稍后再试"
+        if "401" in message or "403" in message or "unauthorized" in low:
+            return "鉴权失败，请检查 API Key 是否正确"
+        if "timeout" in low or "timed out" in low:
+            return "请求上游接口超时，请稍后重试"
+        return message
 
     # ------------------------------------------------------------------
     # 音色样本
     # ------------------------------------------------------------------
 
     def _sample_entries(self) -> list[dict]:
-        """列出 voice_clone_samples 中的样本文件及其存在状态。"""
+        """列出 voice_clone_samples 中的样本文件、存在状态与引用它的引擎。"""
+        references: dict[str, list[str]] = {}
+        for item in self._list_engines():
+            if not isinstance(item, dict):
+                continue
+            sample = str(item.get("voice_sample_name") or "").strip()
+            if not sample:
+                continue
+            name = str(item.get("instance_name") or "").strip() or "(未命名)"
+            references.setdefault(sample, []).append(name)
+
         entries: list[dict] = []
         for raw in self.config.get("voice_clone_samples", []) or []:
             if not isinstance(raw, str) or not raw.strip():
@@ -1463,12 +1563,14 @@ class UniversalTTSPlugin(Star):
                 size = path.stat().st_size if exists else 0
             except OSError:
                 exists, size = False, 0
+            file_name = Path(rel).name
             entries.append(
                 {
                     "path": rel,
-                    "name": Path(rel).name,
+                    "name": file_name,
                     "exists": exists,
                     "size": size,
+                    "referenced_by": references.get(file_name, []),
                 }
             )
         return entries
@@ -1568,6 +1670,201 @@ class UniversalTTSPlugin(Star):
         await self._reload_engine_instances()
         logger.info(f"[UniversalTTS] 已删除音色样本 {name}")
         return json_response({"samples": self._sample_entries()})
+
+    async def web_download_sample(self):
+        """下载音色样本文件（视图侧通过 bridge.download 触发）。"""
+        if file_response is None:
+            return error_response("当前 AstrBot 版本不支持文件下载")
+        rel = str(request.query.get("path", "") or "").strip()
+        if not rel:
+            return error_response("缺少 path 参数")
+        samples = [
+            s
+            for s in (self.config.get("voice_clone_samples", []) or [])
+            if isinstance(s, str)
+        ]
+        if rel not in samples:
+            return error_response(f"样本不存在: {rel}")
+        path = self._data_dir / rel
+        if not path.is_file():
+            return error_response("样本文件不存在，可能已被移动或删除")
+        name = Path(rel).name
+        return file_response(
+            path,
+            filename=name,
+            content_type=_AUDIO_MIME.get(Path(name).suffix.lower().lstrip("."), "application/octet-stream"),
+        )
+
+    async def web_rename_sample(self):
+        """重命名音色样本文件，并同步更新引用它的引擎。"""
+        payload = await request.json(default={}) or {}
+        rel = str(payload.get("path") or "").strip()
+        new_name = Path(str(payload.get("new_name") or "").replace("\\", "/")).name.strip()
+        if not rel:
+            return error_response("缺少 path 参数")
+        if not new_name:
+            return error_response("新文件名不能为空")
+        if new_name in (".", ".."):
+            return error_response("非法的文件名")
+        suffix = Path(new_name).suffix.lower()
+        if suffix not in SAMPLE_EXTS:
+            allowed = " / ".join(sorted(SAMPLE_EXTS))
+            return error_response(f"不支持的格式 {suffix or '(无扩展名)'}，仅支持 {allowed}")
+
+        samples = [
+            s
+            for s in (self.config.get("voice_clone_samples", []) or [])
+            if isinstance(s, str)
+        ]
+        if rel not in samples:
+            return error_response(f"样本不存在: {rel}")
+
+        old_name = Path(rel).name
+        source = self._data_dir / rel
+        if not source.is_file():
+            return error_response("样本文件不存在，无法重命名")
+
+        dest = self._data_dir / SAMPLE_REL_DIR / new_name
+        try:
+            if dest.resolve() == source.resolve():
+                return json_response({"samples": self._sample_entries(), "renamed_refs": 0})
+        except OSError:
+            pass
+        if dest.exists():
+            return error_response(f"已存在同名样本: {new_name}")
+
+        try:
+            source.rename(dest)
+        except OSError as e:
+            return error_response(f"重命名文件失败: {e}")
+
+        new_rel = f"{SAMPLE_REL_DIR}/{new_name}"
+        samples[samples.index(rel)] = new_rel
+        self.config["voice_clone_samples"] = samples
+
+        renamed = 0
+        for item in self._list_engines():
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("voice_sample_name") or "").strip() == old_name:
+                item["voice_sample_name"] = new_name
+                renamed += 1
+
+        await self._persist_config()
+        await self._reload_engine_instances()
+        logger.info(
+            f"[UniversalTTS] 样本已重命名: {old_name} -> {new_name}（同步 {renamed} 个引擎）"
+        )
+        return json_response(
+            {
+                "samples": self._sample_entries(),
+                "path": new_rel,
+                "name": new_name,
+                "renamed_refs": renamed,
+            }
+        )
+
+    # ------------------------------------------------------------------
+    # 全局设置
+    # ------------------------------------------------------------------
+
+    # 这些字段各有专门界面，不在「全局设置」里重复出现
+    _SETTINGS_EXCLUDED = {"engines", "active_engine", "voice_clone_samples"}
+
+    def _read_schema(self) -> dict:
+        """读取并缓存 _conf_schema.json。"""
+        if self._schema_cache is not None:
+            return self._schema_cache
+        try:
+            schema_path = Path(__file__).with_name("_conf_schema.json")
+            data = json.loads(schema_path.read_text(encoding="utf-8-sig"))
+            self._schema_cache = data if isinstance(data, dict) else {}
+        except Exception as e:
+            logger.warning(f"[UniversalTTS] 读取配置结构失败: {e}")
+            self._schema_cache = {}
+        return self._schema_cache
+
+    def _settings_schema(self) -> list[tuple[str, dict]]:
+        return [
+            (key, spec)
+            for key, spec in self._read_schema().items()
+            if isinstance(spec, dict) and key not in self._SETTINGS_EXCLUDED
+        ]
+
+    def _build_settings_payload(self) -> dict:
+        fields: list[dict] = []
+        secrets: list[str] = []
+        for key, spec in self._settings_schema():
+            default = spec.get("default")
+            value = self.config.get(key, default)
+            if self._is_sensitive_field(key):
+                if str(value or "").strip():
+                    secrets.append(key)
+                value = ""
+            fields.append(
+                {
+                    "key": key,
+                    "type": str(spec.get("type") or "string"),
+                    "description": str(spec.get("description") or key),
+                    "hint": str(spec.get("hint") or ""),
+                    "default": default,
+                    "options": spec.get("options") or [],
+                    "value": value,
+                }
+            )
+        return {"fields": fields, "secrets": secrets}
+
+    def _coerce_setting(self, value, field_type: str, default):
+        """按 schema 类型归一化设置值；list 类型接受数组或分隔文本。"""
+        if field_type == "list":
+            items = value if isinstance(value, list) else re.split(r"[\n,，;；]+", str(value or ""))
+            return [str(item).strip() for item in items if str(item).strip()]
+        if field_type in ("int", "float"):
+            # _coerce_field 遇到非法数字会静默退回默认值，这里必须显式报错，
+            # 否则用户填错数字会被无声吞掉。
+            text = str(value).strip()
+            if not text:
+                return default
+            try:
+                return int(float(text)) if field_type == "int" else float(text)
+            except (TypeError, ValueError):
+                raise ValueError("需要填写整数" if field_type == "int" else "需要填写数字")
+        return self._coerce_field(value, field_type, default)
+
+    async def web_get_settings(self):
+        """读取全局设置（敏感字段脱敏）。"""
+        return json_response(self._build_settings_payload())
+
+    async def web_save_settings(self):
+        """保存全局设置；敏感字段留空表示保持原值。"""
+        payload = await request.json(default={}) or {}
+        incoming = payload.get("values")
+        if not isinstance(incoming, dict):
+            return error_response("缺少 values 参数")
+
+        updated: dict = {}
+        for key, spec in self._settings_schema():
+            if key not in incoming:
+                continue
+            label = str(spec.get("description") or key)
+            if self._is_sensitive_field(key) and not str(incoming.get(key) or "").strip():
+                continue
+            try:
+                updated[key] = self._coerce_setting(
+                    incoming[key], str(spec.get("type") or "string"), spec.get("default")
+                )
+            except ValueError as e:
+                return error_response(f"{label}: {e}")
+
+        if not updated:
+            return error_response("没有任何有效改动")
+
+        for key, value in updated.items():
+            self.config[key] = value
+        await self._persist_config()
+        await self._reload_engine_instances()
+        logger.info(f"[UniversalTTS] 已更新全局设置: {', '.join(sorted(updated))}")
+        return json_response(self._build_settings_payload())
 
     async def terminate(self):
         """插件卸载时释放引擎资源"""
