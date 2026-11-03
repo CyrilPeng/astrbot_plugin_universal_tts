@@ -1,0 +1,28 @@
+{
+  "views": {
+    "engines": {
+      "title": "TTS 引擎管理",
+      "description": "在这里增删改查引擎实例，改动保存后立即生效，无需重启 AstrBot。",
+      "new": "新建引擎",
+      "new_title": "新建引擎",
+      "edit_title": "编辑引擎",
+      "save": "保存",
+      "cancel": "取消",
+      "edit": "编辑",
+      "clone": "复制",
+      "delete": "删除",
+      "activate": "设为默认",
+      "badge_default": "默认",
+      "empty": "还没有配置任何引擎，点击右上角「新建引擎」开始。",
+      "unnamed": "（未命名）",
+      "unknown_template": "未知类型",
+      "secret_set": "已设置，留空表示不修改",
+      "confirm_delete": "确定删除引擎「{name}」？此操作不可撤销。",
+      "cloned": "已复制「{name}」，记得修改实例名称。",
+      "saved": "已保存",
+      "name_required": "实例名称不能为空",
+      "no_templates": "未读取到引擎模板定义，请重载插件后重试。",
+      "notice_disabled": "全局默认 TTS 当前处于关闭状态（等同于 /tts_switch 0）。把任意引擎设为默认即可恢复。"
+    }
+  }
+}

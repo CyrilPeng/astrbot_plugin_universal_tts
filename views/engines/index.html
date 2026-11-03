@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TTS</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="page-head">
+        <div class="page-title-wrap">
+          <h1 id="page-title">TTS 引擎管理</h1>
+          <p id="page-desc" class="muted"></p>
+        </div>
+        <button id="btn-new" class="btn btn-primary" type="button">新建引擎</button>
+      </header>
+
+      <div id="banner" class="banner" hidden></div>
+      <div id="notice" class="banner banner-info" hidden></div>
+
+      <div id="list" class="list" role="list"></div>
+      <p id="empty" class="empty" hidden></p>
+    </div>
+
+    <dialog id="editor" class="editor">
+      <div class="editor-head">
+        <h2 id="editor-title">编辑引擎</h2>
+        <button id="btn-close" class="btn btn-ghost" type="button" aria-label="close">✕</button>
+      </div>
+
+      <div class="editor-body">
+        <div id="editor-error" class="banner" hidden></div>
+
+        <label id="template-field" class="field" hidden>
+          <span class="field-label">引擎类型</span>
+          <select id="template-select"></select>
+        </label>
+
+        <div id="fields" class="fields"></div>
+      </div>
+
+      <div class="editor-foot">
+        <button id="btn-cancel" class="btn" type="button">取消</button>
+        <button id="btn-save" class="btn btn-primary" type="button">保存</button>
+      </div>
+    </dialog>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import json
 import random
+import re
 import time
 import uuid
 from pathlib import Path
@@ -19,6 +20,22 @@ try:
     from astrbot.core.star.session_llm_manager import SessionServiceManager
 except Exception:
     SessionServiceManager = None
+
+# WebUI（插件可视化视图）后端 API 依赖 AstrBot >= 4.25.0。
+# 导入失败时静默降级：旧版本会忽略 views/ 目录，插件其余功能完全不受影响。
+try:
+    from astrbot.api.web import error_response, json_response, request
+except Exception:  # pragma: no cover - 旧版本 AstrBot
+    error_response = json_response = request = None
+
+
+PLUGIN_NAME = "astrbot_plugin_universal_tts"
+
+# 命中这些名字的字段在 WebUI 列表中会被脱敏；前端留空即表示"沿用原值"。
+_SENSITIVE_FIELD_RE = re.compile(
+    r"(^|_)(api_key|access_token|subscription_key|token|secret|password)($|_)",
+    re.IGNORECASE,
+)
 
 
 DISABLED_ENGINE = "__disabled__"
@@ -110,7 +127,7 @@ def _read_plugin_version(fallback: str = "0.0.0") -> str:
     "astrbot_plugin_universal_tts",
     "某不科学的高数",
     "通用 TTS 插件，支持多引擎切换，通过钩子拦截实现 TTS",
-    _read_plugin_version("1.3.4"),
+    _read_plugin_version("1.3.5"),
 )
 class UniversalTTSPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -129,6 +146,11 @@ class UniversalTTSPlugin(Star):
         self._bindings_file = self._data_dir / "session_bindings.json"
         self._runtime_state_file = self._data_dir / "runtime_state.json"
         self._data_dir.mkdir(parents=True, exist_ok=True)
+
+        # WebUI（插件可视化视图）相关
+        self._context = context
+        self._templates_cache: dict | None = None
+        self._register_web_apis()
 
     def _load_bindings(self):
         """从文件加载会话绑定"""
@@ -966,6 +988,328 @@ class UniversalTTSPlugin(Star):
         self.config["tts_text_limit"] = limit
         await self._persist_config()
         yield event.plain_result(f"已设置 TTS 字数上限为: {limit} 字符")
+
+    # ------------------------------------------------------------------
+    # WebUI（插件可视化视图）后端 API
+    # ------------------------------------------------------------------
+
+    def _register_web_apis(self) -> None:
+        """注册 WebUI 视图所需的后端 API。
+
+        低版本 AstrBot 没有 register_web_api，此时静默跳过；views/ 目录同样会被
+        旧版本忽略，因此不会出现"装了插件却加载失败"的情况。
+        """
+        register = getattr(self._context, "register_web_api", None)
+        if not callable(register) or json_response is None:
+            logger.info(
+                "[UniversalTTS] 当前 AstrBot 版本不支持插件 Web API，"
+                "WebUI 引擎管理页不可用（原有配置表单不受影响）"
+            )
+            return
+        prefix = f"/{PLUGIN_NAME}"
+        apis = (
+            (f"{prefix}/engines", self.web_list_engines, ["GET"], "列出 TTS 引擎实例"),
+            (f"{prefix}/engines/save", self.web_save_engine, ["POST"], "新增或更新引擎实例"),
+            (f"{prefix}/engines/clone", self.web_clone_engine, ["POST"], "复制引擎实例"),
+            (f"{prefix}/engines/delete", self.web_delete_engine, ["POST"], "删除引擎实例"),
+            (f"{prefix}/engines/activate", self.web_activate_engine, ["POST"], "设置默认引擎"),
+        )
+        for route, handler, methods, desc in apis:
+            try:
+                register(route, handler, methods, desc)
+            except Exception as e:
+                logger.error(f"[UniversalTTS] 注册 Web API 失败 {route}: {e}")
+        logger.debug(f"[UniversalTTS] 已注册 {len(apis)} 个 Web API 路由")
+
+    def _engine_templates(self) -> dict:
+        """读取 _conf_schema.json 中的引擎模板定义，供前端动态渲染表单。"""
+        if self._templates_cache is not None:
+            return self._templates_cache
+        try:
+            schema_path = Path(__file__).with_name("_conf_schema.json")
+            schema = json.loads(schema_path.read_text(encoding="utf-8-sig"))
+            node = (schema or {}).get("engines") or {}
+            templates = node.get("templates") or {}
+            self._templates_cache = templates if isinstance(templates, dict) else {}
+        except Exception as e:
+            logger.warning(f"[UniversalTTS] 读取引擎模板定义失败: {e}")
+            self._templates_cache = {}
+        return self._templates_cache
+
+    @staticmethod
+    def _is_sensitive_field(name: str) -> bool:
+        """判断字段是否为密钥类字段（需要在 WebUI 中脱敏）。"""
+        return bool(_SENSITIVE_FIELD_RE.search(name or ""))
+
+    def _build_engines_payload(self) -> dict:
+        """构造返回给 WebUI 的引擎列表（密钥脱敏，并标记哪些密钥已设置）。"""
+        engines: list[dict] = []
+        for ec in self._list_engines():
+            if not isinstance(ec, dict):
+                continue
+            item = dict(ec)
+            secrets = [
+                key
+                for key in item
+                if isinstance(key, str)
+                and self._is_sensitive_field(key)
+                and str(item.get(key) or "").strip()
+            ]
+            for key in secrets:
+                item[key] = ""
+            item["_secrets"] = secrets
+            engines.append(item)
+        return {
+            "engines": engines,
+            "active_engine": str(self.config.get("active_engine") or ""),
+            "disabled_engine": DISABLED_ENGINE,
+            "templates": self._engine_templates(),
+        }
+
+    @staticmethod
+    def _coerce_field(value, field_type: str, default):
+        """按 schema 声明的类型转换前端提交的值。"""
+        if field_type == "int":
+            try:
+                return int(float(value))
+            except (TypeError, ValueError):
+                return default if isinstance(default, int) else 0
+        if field_type == "float":
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return default if isinstance(default, float) else 0.0
+        if field_type == "bool":
+            if isinstance(value, bool):
+                return value
+            if value is None:
+                return bool(default)
+            return str(value).strip().lower() in ("1", "true", "yes", "on")
+        return "" if value is None else str(value)
+
+    def _normalize_engine(
+        self, template_key: str, incoming: dict, existing: dict | None
+    ) -> dict:
+        """按模板定义清洗前端提交的引擎字段，避免脏数据写进配置文件。"""
+        template = self._engine_templates().get(template_key)
+        if not isinstance(template, dict):
+            raise ValueError(f"未知的引擎模板: {template_key}")
+        items = template.get("items") or {}
+        existing = existing or {}
+        result: dict = dict(existing)  # 保留模板未声明、但用户手工添加的字段
+        for field, spec in items.items():
+            if not isinstance(spec, dict):
+                continue
+            field_type = str(spec.get("type") or "string")
+            default = spec.get("default")
+            if self._is_sensitive_field(field):
+                submitted = incoming.get(field)
+                # 前端拿到的是脱敏空值：留空表示沿用原值，避免误清空密钥
+                if submitted is None or str(submitted).strip() == "":
+                    result[field] = existing.get(field, default if default is not None else "")
+                else:
+                    result[field] = self._coerce_field(submitted, field_type, default)
+                continue
+            if field not in incoming:
+                # 前端未提交该字段：优先沿用已有值，否则回落到 schema 默认值
+                if field in existing:
+                    result[field] = existing[field]
+                else:
+                    result[field] = self._coerce_field(default, field_type, default)
+                continue
+            result[field] = self._coerce_field(incoming.get(field), field_type, default)
+        result["__template_key"] = template_key
+        return result
+
+    @staticmethod
+    def _as_index(value, limit: int) -> int | None:
+        """把前端传来的 index 规范成合法下标；None/空串表示"新增"。"""
+        if value is None or value == "":
+            return None
+        try:
+            idx = int(value)
+        except (TypeError, ValueError):
+            raise ValueError("index 必须是整数")
+        if idx < 0 or idx >= limit:
+            raise ValueError("index 超出范围")
+        return idx
+
+    async def _apply_engines(self, engines: list[dict]) -> None:
+        """写回引擎列表、持久化配置，并重建引擎实例使其立即生效。"""
+        self.config["engines"] = engines
+        await self._persist_config()
+        await self._reload_engine_instances()
+
+    async def _reload_engine_instances(self) -> None:
+        """按最新配置重建引擎实例（WebUI 改动后无需重启 AstrBot）。"""
+        stale: list[TTSEngine] = []
+        seen: set[int] = set()
+        candidates = ([self._engine] if self._engine else []) + list(
+            self._cached_engines.values()
+        )
+        for engine in candidates:
+            if engine is not None and id(engine) not in seen:
+                seen.add(id(engine))
+                stale.append(engine)
+        self._engine = None
+        self._cached_engines.clear()
+        for engine in stale:
+            try:
+                await engine.close()
+            except Exception as e:
+                logger.warning(f"[UniversalTTS] 关闭旧引擎实例失败: {e}")
+
+        if not self.config.get("enable", True):
+            return
+        engines_config = [e for e in self._list_engines() if isinstance(e, dict)]
+        if not engines_config:
+            logger.warning("[UniversalTTS] 引擎列表为空，TTS 不会生效")
+            return
+        active_name = str(self.config.get("active_engine") or "").strip()
+        if active_name == DISABLED_ENGINE:
+            return
+        target = None
+        if active_name:
+            for ec in engines_config:
+                if str(ec.get("instance_name") or "").strip() == active_name:
+                    target = ec
+                    break
+        if target is None:
+            target = engines_config[0]
+        try:
+            self._engine = get_engine(target, self.config)
+            logger.info(
+                f"[UniversalTTS] 引擎已重新加载: {self._engine.instance_name} "
+                f"(类型: {target.get('__template_key', '')})"
+            )
+        except Exception as e:
+            logger.error(f"[UniversalTTS] 重建引擎实例失败: {type(e).__name__}: {e}")
+
+    async def web_list_engines(self):
+        return json_response(self._build_engines_payload())
+
+    async def web_save_engine(self):
+        payload = await request.json(default={})
+        if not isinstance(payload, dict):
+            return error_response("请求体必须是 JSON 对象")
+        raw = payload.get("engine")
+        if not isinstance(raw, dict):
+            return error_response("缺少 engine 字段")
+        template_key = str(raw.get("__template_key") or "").strip()
+        if not template_key:
+            return error_response("缺少 __template_key")
+        if template_key not in self._engine_templates():
+            return error_response(f"未知的引擎模板: {template_key}")
+
+        engines = [dict(e) for e in self._list_engines() if isinstance(e, dict)]
+        try:
+            index = self._as_index(payload.get("index"), len(engines))
+        except ValueError as e:
+            return error_response(str(e))
+        existing = engines[index] if index is not None else None
+
+        try:
+            normalized = self._normalize_engine(template_key, raw, existing)
+        except ValueError as e:
+            return error_response(str(e))
+
+        name = str(normalized.get("instance_name") or "").strip()
+        if not name:
+            return error_response("实例名称不能为空")
+        for i, ec in enumerate(engines):
+            if index is not None and i == index:
+                continue
+            if str(ec.get("instance_name") or "").strip() == name:
+                return error_response(f"实例名称已存在: {name}")
+        normalized["instance_name"] = name
+
+        if index is None:
+            engines.append(normalized)
+        else:
+            engines[index] = normalized
+
+        active = str(self.config.get("active_engine") or "").strip()
+        if existing is not None and active:
+            old_name = str(existing.get("instance_name") or "").strip()
+            if active == old_name and old_name != name:
+                self.config["active_engine"] = name
+        if not active and engines:
+            self.config["active_engine"] = str(engines[0].get("instance_name") or "").strip()
+
+        await self._apply_engines(engines)
+        return json_response(self._build_engines_payload())
+
+    async def web_clone_engine(self):
+        payload = await request.json(default={})
+        engines = [dict(e) for e in self._list_engines() if isinstance(e, dict)]
+        try:
+            index = self._as_index(payload.get("index"), len(engines))
+        except ValueError as e:
+            return error_response(str(e))
+        if index is None:
+            return error_response("缺少 index")
+
+        source = dict(engines[index])
+        source.pop("_secrets", None)
+        base = str(source.get("instance_name") or "").strip() or str(
+            source.get("__template_key") or "engine"
+        )
+        names = {str(e.get("instance_name") or "").strip() for e in engines}
+        candidate = f"{base} 副本"
+        seq = 2
+        while candidate in names:
+            candidate = f"{base} 副本{seq}"
+            seq += 1
+        source["instance_name"] = candidate
+        engines.insert(index + 1, source)
+        await self._apply_engines(engines)
+        return json_response(self._build_engines_payload())
+
+    async def web_delete_engine(self):
+        payload = await request.json(default={})
+        engines = [dict(e) for e in self._list_engines() if isinstance(e, dict)]
+        try:
+            index = self._as_index(payload.get("index"), len(engines))
+        except ValueError as e:
+            return error_response(str(e))
+        if index is None:
+            return error_response("缺少 index")
+
+        removed = engines.pop(index)
+        removed_name = str(removed.get("instance_name") or "").strip()
+        if str(self.config.get("active_engine") or "").strip() == removed_name:
+            self.config["active_engine"] = (
+                str(engines[0].get("instance_name") or "").strip() if engines else ""
+            )
+        stale = [sid for sid, bound in self._session_bindings.items() if bound == removed_name]
+        for sid in stale:
+            del self._session_bindings[sid]
+        if stale:
+            self._save_bindings()
+        await self._apply_engines(engines)
+        return json_response(self._build_engines_payload())
+
+    async def web_activate_engine(self):
+        payload = await request.json(default={})
+        value = str(payload.get("name") or "").strip()
+        if value == DISABLED_ENGINE:
+            self.config["active_engine"] = DISABLED_ENGINE
+            await self._persist_config()
+            await self._reload_engine_instances()
+            return json_response(self._build_engines_payload())
+        if not value:
+            return error_response("缺少 name")
+        names = {
+            str(e.get("instance_name") or "").strip()
+            for e in self._list_engines()
+            if isinstance(e, dict)
+        }
+        if value not in names:
+            return error_response(f"未找到引擎: {value}")
+        self.config["active_engine"] = value
+        await self._persist_config()
+        await self._reload_engine_instances()
+        return json_response(self._build_engines_payload())
 
     async def terminate(self):
         """插件卸载时释放引擎资源"""
