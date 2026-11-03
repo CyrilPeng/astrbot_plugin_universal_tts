@@ -1,7 +1,7 @@
 {
   "views": {
     "engines": {
-      "title": "TTS 引擎管理",
+      "title": "通用 TTS 管理",
       "description": "在这里增删改查引擎实例，改动保存后立即生效，无需重启 AstrBot。",
       "new": "新建引擎",
       "new_title": "新建引擎",
@@ -21,8 +21,30 @@
       "cloned": "已复制「{name}」，记得修改实例名称。",
       "saved": "已保存",
       "name_required": "实例名称不能为空",
+      "name_duplicate": "已存在同名引擎「{name}」",
       "no_templates": "未读取到引擎模板定义，请重载插件后重试。",
-      "notice_disabled": "全局默认 TTS 当前处于关闭状态（等同于 /tts_switch 0）。把任意引擎设为默认即可恢复。"
+      "notice_disabled": "全局默认 TTS 当前处于关闭状态（等同于 /tts_switch 0）。把任意引擎设为默认即可恢复。",
+      "notice_plugin_off": "插件总开关（enable）已关闭，语音合成不会生效。",
+      "notice_global_tts_off": "AstrBot 全局 TTS 开关已关闭，本插件不会接管语音合成。请在「配置 → 服务提供商 → TTS」中开启。",
+      "confirm": "确定",
+      "invalid_number": "「{field}」需要填写数字",
+      "invalid_integer": "「{field}」需要填写整数",
+      "preview": "试听",
+      "testing": "合成中…",
+      "preview_ok": "试听成功（{fmt} · {ms} ms · {kb} KB）",
+      "preview_empty": "引擎没有返回音频",
+      "preview_unplayable": "合成成功，但格式 {fmt} 无法在浏览器中播放。",
+      "sample_default": "（自动使用第一个样本）",
+      "sample_missing": "（文件缺失）",
+      "sample_upload": "上传",
+      "sample_delete": "删除",
+      "sample_hint": "可上传 mp3 / wav 样本；选择后该引擎将使用它克隆音色。",
+      "sample_pick_first": "请先选择一个样本",
+      "sample_confirm_delete": "确定删除样本「{name}」？",
+      "sample_uploaded": "已上传样本 {name}",
+      "sample_deleted": "已删除样本 {name}",
+      "sample_bad_ext": "仅支持 mp3 / wav 文件",
+      "uploading": "上传中…"
     }
   }
 }

@@ -3,14 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>TTS</title>
+    <title>通用 TTS</title>
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
     <div class="page">
       <header class="page-head">
         <div class="page-title-wrap">
-          <h1 id="page-title">TTS 引擎管理</h1>
+          <h1 id="page-title">通用 TTS 管理</h1>
           <p id="page-desc" class="muted"></p>
         </div>
         <button id="btn-new" class="btn btn-primary" type="button">新建引擎</button>
@@ -18,10 +18,26 @@
 
       <div id="banner" class="banner" hidden></div>
       <div id="notice" class="banner banner-info" hidden></div>
+      <audio id="player" class="player" controls hidden></audio>
 
       <div id="list" class="list" role="list"></div>
       <p id="empty" class="empty" hidden></p>
     </div>
+
+    <dialog id="confirm" class="editor confirm">
+      <div class="editor-head">
+        <h2>确认</h2>
+      </div>
+      <div class="editor-body">
+        <p id="confirm-message" class="confirm-message"></p>
+      </div>
+      <div class="editor-foot">
+        <div class="editor-foot-right">
+          <button id="confirm-cancel" class="btn" type="button">取消</button>
+          <button id="confirm-ok" class="btn btn-danger" type="button">确定</button>
+        </div>
+      </div>
+    </dialog>
 
     <dialog id="editor" class="editor">
       <div class="editor-head">
@@ -41,8 +57,11 @@
       </div>
 
       <div class="editor-foot">
-        <button id="btn-cancel" class="btn" type="button">取消</button>
-        <button id="btn-save" class="btn btn-primary" type="button">保存</button>
+        <button id="btn-preview" class="btn" type="button">试听</button>
+        <div class="editor-foot-right">
+          <button id="btn-cancel" class="btn" type="button">取消</button>
+          <button id="btn-save" class="btn btn-primary" type="button">保存</button>
+        </div>
       </div>
     </dialog>
 

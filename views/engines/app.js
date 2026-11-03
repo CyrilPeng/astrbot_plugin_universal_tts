@@ -12,10 +12,16 @@ const state = {
   active_engine: "",
   disabled_engine: "__disabled__",
   templates: {},
+  samples: [],
+  plugin_enabled: null,
+  global_tts_enabled: null,
 };
 
 /** @type {{index: number|null, templateKey: string, draft: object, secrets: Set<string>}|null} */
 let editing = null;
+
+let fileInput = null;
+let confirmResolve = null;
 
 const els = {};
 
@@ -58,6 +64,29 @@ function setEditorError(message) {
   }
   box.hidden = false;
   box.textContent = message;
+}
+
+/**
+ * 视图 iframe 的 sandbox 是 allow-scripts allow-forms allow-downloads，
+ * 不含 allow-modals：window.confirm() / alert() / prompt() 会被浏览器静默
+ * 忽略并直接返回 false。所有确认一律走页面内的 <dialog>。
+ */
+function askConfirm(message, okLabel) {
+  return new Promise((resolve) => {
+    confirmResolve = resolve;
+    els.confirmMessage.textContent = message;
+    els.confirmOk.textContent = okLabel || t("confirm", "确定");
+    els.confirmCancel.textContent = t("cancel", "取消");
+    els.confirm.showModal();
+  });
+}
+
+function settleConfirm(value) {
+  if (!confirmResolve) return;
+  const resolve = confirmResolve;
+  confirmResolve = null;
+  if (els.confirm.open) els.confirm.close();
+  resolve(value);
 }
 
 function templateLabel(templateKey) {
@@ -108,10 +137,69 @@ function applyPayload(data) {
   state.engines = Array.isArray(data.engines) ? data.engines : [];
   state.active_engine = String(data.active_engine || "");
   state.disabled_engine = String(data.disabled_engine || "__disabled__");
+  state.plugin_enabled =
+    data.plugin_enabled === undefined || data.plugin_enabled === null
+      ? null
+      : Boolean(data.plugin_enabled);
+  state.global_tts_enabled =
+    data.global_tts_enabled === undefined || data.global_tts_enabled === null
+      ? null
+      : Boolean(data.global_tts_enabled);
   if (data.templates && typeof data.templates === "object") {
     state.templates = data.templates;
   }
   renderList();
+}
+
+/* ------------------------------------------------------------------ */
+/* 音频预览                                                            */
+/* ------------------------------------------------------------------ */
+
+async function runPreview(payload, button) {
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = t("testing", "合成中…");
+  setEditorError("");
+  setBanner("");
+  try {
+    const data = await bridge.apiPost("engines/test", payload);
+    if (!data || !data.audio) {
+      throw new Error(t("preview_empty", "引擎没有返回音频"));
+    }
+    if (data.playable === false) {
+      setBanner(
+        t("preview_unplayable", "合成成功，但格式 {fmt} 无法在浏览器中播放。", {
+          fmt: data.format || "?",
+        }),
+        "error",
+      );
+      return;
+    }
+    els.player.src = data.audio;
+    els.player.hidden = false;
+    try {
+      els.player.currentTime = 0;
+      await els.player.play();
+    } catch (playError) {
+      // 合成耗时较长时浏览器可能已丢失用户手势而拒绝自动播放，
+      // 播放器就在页面上，用户可以直接点播放键。
+    }
+    setBanner(
+      t("preview_ok", "试听成功（{fmt} · {ms} ms · {kb} KB）", {
+        fmt: data.format || "?",
+        ms: data.elapsed_ms || 0,
+        kb: Math.max(1, Math.round((data.bytes || 0) / 1024)),
+      }),
+      "ok",
+    );
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    if (editing) setEditorError(message);
+    else setBanner(message, "error");
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -136,17 +224,49 @@ function renderList() {
     els.empty.textContent = t("empty", "还没有配置任何引擎，点击右上角「新建引擎」开始。");
   }
 
-  const globalDisabled = String(state.active_engine || "").trim() === state.disabled_engine;
-  els.notice.hidden = !globalDisabled;
-  if (globalDisabled) {
-    els.notice.textContent = t(
-      "notice_disabled",
-      "全局默认 TTS 当前处于关闭状态（等同于 /tts_switch 0）。把任意引擎设为默认即可恢复。",
-    );
-  }
+  renderNotice();
 
   state.engines.forEach((engine, index) => {
     els.list.appendChild(renderRow(engine, index));
+  });
+}
+
+/** 汇总所有"插件不会生效"的状态，一次性提示给用户。 */
+function renderNotice() {
+  const lines = [];
+  let severe = false;
+
+  if (state.plugin_enabled === false) {
+    severe = true;
+    lines.push(t("notice_plugin_off", "插件总开关（enable）已关闭，语音合成不会生效。"));
+  }
+  if (state.global_tts_enabled === false) {
+    severe = true;
+    lines.push(
+      t(
+        "notice_global_tts_off",
+        "AstrBot 全局 TTS 开关已关闭，本插件不会接管语音合成。请在「配置 → 服务提供商 → TTS」中开启。",
+      ),
+    );
+  }
+  if (String(state.active_engine || "").trim() === state.disabled_engine) {
+    lines.push(
+      t(
+        "notice_disabled",
+        "全局默认 TTS 当前处于关闭状态（等同于 /tts_switch 0）。把任意引擎设为默认即可恢复。",
+      ),
+    );
+  }
+
+  els.notice.hidden = lines.length === 0;
+  els.notice.innerHTML = "";
+  if (!lines.length) return;
+  els.notice.dataset.kind = severe ? "warn" : "info";
+  lines.forEach((text) => {
+    const line = document.createElement("div");
+    line.className = "notice-line";
+    line.textContent = text;
+    els.notice.appendChild(line);
   });
 }
 
@@ -161,9 +281,8 @@ function renderRow(engine, index) {
   const name = document.createElement("div");
   name.className = "row-name";
   const nameText = document.createElement("span");
+  nameText.className = "row-name-text";
   nameText.textContent = engineName(engine) || t("unnamed", "（未命名）");
-  nameText.style.overflow = "hidden";
-  nameText.style.textOverflow = "ellipsis";
   name.appendChild(nameText);
   if (isActive(engine)) {
     const badge = document.createElement("span");
@@ -175,13 +294,21 @@ function renderRow(engine, index) {
 
   const meta = document.createElement("div");
   meta.className = "row-meta";
-  meta.textContent = templateLabel(engine.__template_key);
+  const bits = [templateLabel(engine.__template_key)];
+  if (engine.voice_sample_name) bits.push(String(engine.voice_sample_name));
+  meta.textContent = bits.join(" · ");
   main.appendChild(meta);
 
   row.appendChild(main);
 
   const actions = document.createElement("div");
   actions.className = "row-actions";
+
+  const previewBtn = makeButton(t("preview", "试听"), "btn", () => {
+    runPreview({ index }, previewBtn);
+  });
+  actions.appendChild(previewBtn);
+
   if (!isActive(engine)) {
     actions.appendChild(
       makeButton(t("activate", "设为默认"), "btn", () => activateEngine(index)),
@@ -235,6 +362,17 @@ function openEditor(index) {
   setEditorError("");
   renderEditor();
   els.editor.showModal();
+  loadSamples();
+}
+
+async function loadSamples() {
+  try {
+    const data = await bridge.apiGet("samples");
+    state.samples = Array.isArray(data.samples) ? data.samples : [];
+  } catch (error) {
+    state.samples = [];
+  }
+  if (editing) renderEditor();
 }
 
 function renderEditor() {
@@ -264,6 +402,10 @@ function renderEditor() {
 }
 
 function renderField(key, spec, value, secretIsSet) {
+  if (key === "voice_sample_name") {
+    return renderSampleField(key, spec, value);
+  }
+
   const wrap = document.createElement("label");
   wrap.className = "field";
 
@@ -322,6 +464,145 @@ function renderField(key, spec, value, secretIsSet) {
   return wrap;
 }
 
+/** 音色样本字段：下拉选择 + 上传 / 删除。
+ *  这里用 div 而不是 label：label 内的按钮点击会被转发给控件，导致双触发。
+ */
+function renderSampleField(key, spec, value) {
+  const wrap = document.createElement("div");
+  wrap.className = "field";
+
+  const label = document.createElement("span");
+  label.className = "field-label";
+  label.textContent = spec.description || key;
+  wrap.appendChild(label);
+
+  const row = document.createElement("div");
+  row.className = "sample-row";
+
+  const select = document.createElement("select");
+  select.name = key;
+
+  const emptyOption = document.createElement("option");
+  emptyOption.value = "";
+  emptyOption.textContent = t("sample_default", "（自动使用第一个样本）");
+  select.appendChild(emptyOption);
+
+  const current = String(value || "");
+  let matched = false;
+  state.samples.forEach((sample) => {
+    const option = document.createElement("option");
+    option.value = sample.name;
+    option.textContent = sample.exists
+      ? sample.name
+      : `${sample.name} ${t("sample_missing", "（文件缺失）")}`;
+    if (sample.name === current) {
+      option.selected = true;
+      matched = true;
+    }
+    select.appendChild(option);
+  });
+  if (current && !matched) {
+    const option = document.createElement("option");
+    option.value = current;
+    option.textContent = `${current} ${t("sample_missing", "（文件缺失）")}`;
+    option.selected = true;
+    select.appendChild(option);
+  }
+  row.appendChild(select);
+
+  const uploadBtn = makeButton(t("sample_upload", "上传"), "btn", () => {
+    pickFile(async (file) => {
+      await uploadSample(file, uploadBtn);
+    });
+  });
+  row.appendChild(uploadBtn);
+
+  const deleteBtn = makeButton(t("sample_delete", "删除"), "btn btn-danger", () => {
+    deleteSample(select.value);
+  });
+  row.appendChild(deleteBtn);
+
+  wrap.appendChild(row);
+
+  const hint = document.createElement("span");
+  hint.className = "field-hint";
+  hint.textContent =
+    spec.hint || t("sample_hint", "可上传 mp3 / wav 样本；选择后该引擎将使用它克隆音色。");
+  wrap.appendChild(hint);
+
+  return wrap;
+}
+
+function pickFile(onPicked) {
+  if (!fileInput) {
+    fileInput = document.createElement("input");
+    fileInput.type = "file";
+    fileInput.accept = ".mp3,.wav,audio/mpeg,audio/wav";
+    fileInput.style.display = "none";
+    document.body.appendChild(fileInput);
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files && fileInput.files[0];
+      fileInput.value = "";
+      if (!file || typeof fileInput._onPicked !== "function") return;
+      await fileInput._onPicked(file);
+    });
+  }
+  fileInput._onPicked = onPicked;
+  fileInput.click();
+}
+
+async function uploadSample(file, button) {
+  if (!/\.(mp3|wav)$/i.test(file.name || "")) {
+    setEditorError(t("sample_bad_ext", "仅支持 mp3 / wav 文件"));
+    return;
+  }
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = t("uploading", "上传中…");
+  setEditorError("");
+  try {
+    const data = await bridge.upload("samples/upload", file);
+    state.samples = Array.isArray(data.samples) ? data.samples : state.samples;
+    editing.draft = Object.assign(collectDraft(), {
+      voice_sample_name: data.name || "",
+    });
+    renderEditor();
+    setBanner(t("sample_uploaded", "已上传样本 {name}", { name: data.name }), "ok");
+  } catch (error) {
+    setEditorError(error && error.message ? error.message : String(error));
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
+async function deleteSample(name) {
+  if (!name) {
+    setEditorError(t("sample_pick_first", "请先选择一个样本"));
+    return;
+  }
+  const sample = state.samples.find((item) => item.name === name);
+  if (!sample) {
+    setEditorError(t("sample_pick_first", "请先选择一个样本"));
+    return;
+  }
+  const ok = await askConfirm(
+    t("sample_confirm_delete", "确定删除样本「{name}」？", { name }),
+    t("delete", "删除"),
+  );
+  if (!ok) return;
+  setEditorError("");
+  try {
+    const data = await bridge.apiPost("samples/delete", { path: sample.path });
+    state.samples = Array.isArray(data.samples) ? data.samples : [];
+    editing.draft = Object.assign(collectDraft(), { voice_sample_name: "" });
+    renderEditor();
+    setBanner(t("sample_deleted", "已删除样本 {name}", { name }), "ok");
+  } catch (error) {
+    setEditorError(error && error.message ? error.message : String(error));
+  }
+}
+
 function collectDraft() {
   if (!editing) return {};
   const items = (state.templates[editing.templateKey] || {}).items || {};
@@ -333,6 +614,41 @@ function collectDraft() {
     draft[key] = String(spec.type || "string") === "bool" ? input.checked : input.value;
   }
   return draft;
+}
+
+/** 提交前本地校验：重名、空名、非法数值。文案可走 i18n。 */
+function validateDraft(engine) {
+  const name = String(engine.instance_name || "").trim();
+  if (!name) {
+    return t("name_required", "实例名称不能为空");
+  }
+  const duplicate = state.engines.some(
+    (item, idx) => idx !== editing.index && engineName(item) === name,
+  );
+  if (duplicate) {
+    return t("name_duplicate", "已存在同名引擎「{name}」", { name });
+  }
+
+  const items = (state.templates[editing.templateKey] || {}).items || {};
+  for (const [key, spec] of Object.entries(items)) {
+    if (!spec || typeof spec !== "object") continue;
+    const type = String(spec.type || "string");
+    if (type !== "int" && type !== "float") continue;
+    const raw = String(engine[key] === undefined ? "" : engine[key]).trim();
+    if (raw === "") continue;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) {
+      return t("invalid_number", "「{field}」需要填写数字", {
+        field: spec.description || key,
+      });
+    }
+    if (type === "int" && !Number.isInteger(parsed)) {
+      return t("invalid_integer", "「{field}」需要填写整数", {
+        field: spec.description || key,
+      });
+    }
+  }
+  return "";
 }
 
 /* ------------------------------------------------------------------ */
@@ -376,9 +692,11 @@ async function cloneEngine(index) {
 
 async function deleteEngine(index) {
   const name = engineName(state.engines[index]) || t("unnamed", "（未命名）");
-  if (!window.confirm(t("confirm_delete", "确定删除引擎「{name}」？此操作不可撤销。", { name }))) {
-    return;
-  }
+  const ok = await askConfirm(
+    t("confirm_delete", "确定删除引擎「{name}」？此操作不可撤销。", { name }),
+    t("delete", "删除"),
+  );
+  if (!ok) return;
   setBanner("");
   try {
     applyPayload(await bridge.apiPost("engines/delete", { index }));
@@ -390,8 +708,10 @@ async function deleteEngine(index) {
 async function saveEditor() {
   if (!editing) return;
   const engine = collectDraft();
-  if (!String(engine.instance_name || "").trim()) {
-    setEditorError(t("name_required", "实例名称不能为空"));
+
+  const problem = validateDraft(engine);
+  if (problem) {
+    setEditorError(problem);
     return;
   }
 
@@ -421,6 +741,11 @@ function bindEvents() {
   els.btnCancel.addEventListener("click", () => els.editor.close());
   els.btnClose.addEventListener("click", () => els.editor.close());
   els.btnSave.addEventListener("click", saveEditor);
+  els.btnPreview.addEventListener("click", () => {
+    const payload = { engine: collectDraft() };
+    if (editing && editing.index !== null) payload.index = editing.index;
+    runPreview(payload, els.btnPreview);
+  });
   els.templateSelect.addEventListener("change", () => {
     if (!editing) return;
     editing.templateKey = els.templateSelect.value;
@@ -434,6 +759,16 @@ function bindEvents() {
   });
   els.editor.addEventListener("click", (event) => {
     if (event.target === els.editor) els.editor.close();
+  });
+
+  els.confirmOk.addEventListener("click", () => settleConfirm(true));
+  els.confirmCancel.addEventListener("click", () => settleConfirm(false));
+  els.confirm.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    settleConfirm(false);
+  });
+  els.confirm.addEventListener("click", (event) => {
+    if (event.target === els.confirm) settleConfirm(false);
   });
 }
 
@@ -449,6 +784,7 @@ async function main() {
     notice: byId("notice"),
     list: byId("list"),
     empty: byId("empty"),
+    player: byId("player"),
     editor: byId("editor"),
     editorTitle: byId("editor-title"),
     editorError: byId("editor-error"),
@@ -459,13 +795,18 @@ async function main() {
     btnSave: byId("btn-save"),
     btnCancel: byId("btn-cancel"),
     btnClose: byId("btn-close"),
+    btnPreview: byId("btn-preview"),
+    confirm: byId("confirm"),
+    confirmMessage: byId("confirm-message"),
+    confirmOk: byId("confirm-ok"),
+    confirmCancel: byId("confirm-cancel"),
   });
 
   bindEvents();
 
   await bridge.ready();
 
-  const title = t("title", "TTS 引擎管理");
+  const title = t("title", "通用 TTS 管理");
   byId("page-title").textContent = title;
   byId("page-desc").textContent = t(
     "description",
@@ -474,14 +815,15 @@ async function main() {
   els.btnNew.textContent = t("new", "新建引擎");
   els.btnSave.textContent = t("save", "保存");
   els.btnCancel.textContent = t("cancel", "取消");
+  els.btnPreview.textContent = t("preview", "试听");
   document.title = title;
 
   await loadEngines();
 
   if (bridge.onContext) {
     bridge.onContext(() => {
-      document.title = t("title", "TTS 引擎管理");
-      byId("page-title").textContent = t("title", "TTS 引擎管理");
+      document.title = t("title", "通用 TTS 管理");
+      byId("page-title").textContent = t("title", "通用 TTS 管理");
     });
   }
 }
