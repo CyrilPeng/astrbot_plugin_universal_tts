@@ -17,6 +17,8 @@ const state = {
   bindings: [],
   bindingEngines: [],
   history: [],
+  helpCommands: [],
+  helpSnapshot: null,
   status: null,
   token: "",
   plugin_enabled: null,
@@ -912,7 +914,7 @@ async function saveEditor() {
 /* 标签页                                                              */
 /* ------------------------------------------------------------------ */
 
-const TABS = ["engines", "samples", "bindings", "settings"];
+const TABS = ["engines", "samples", "bindings", "settings", "help"];
 let currentTab = "engines";
 let renamingPath = null;
 
@@ -943,6 +945,7 @@ async function switchTab(name) {
     samples: [els.tabSamplesBtn, els.tabSamples],
     bindings: [els.tabBindingsBtn, els.tabBindings],
     settings: [els.tabSettingsBtn, els.tabSettings],
+    help: [els.tabHelpBtn, els.tabHelp],
   };
   for (const [key, pair] of Object.entries(map)) {
     const active = key === name;
@@ -959,6 +962,8 @@ async function switchTab(name) {
   } else if (name === "settings") {
     await loadSettings();
     await loadHistory();
+  } else if (name === "help") {
+    await loadHelp();
   }
 }
 
@@ -1263,6 +1268,224 @@ function renderHistory() {
 }
 
 /* ------------------------------------------------------------------ */
+/* 指令与帮助                                                          */
+/* ------------------------------------------------------------------ */
+
+async function loadHelp() {
+  try {
+    const data = await bridge.apiGet("help");
+    state.helpCommands = Array.isArray(data.commands) ? data.commands : [];
+    state.helpSnapshot =
+      data.snapshot && typeof data.snapshot === "object" ? data.snapshot : {};
+    renderHelp();
+  } catch (error) {
+    setBanner(error && error.message ? error.message : String(error), "error");
+  }
+}
+
+function onOff(value) {
+  if (value === null || value === undefined) return t("unknown", "未知");
+  return value ? t("switch_on", "开启") : t("switch_off", "关闭");
+}
+
+function fillList(container, text) {
+  if (!container) return;
+  container.innerHTML = "";
+  const lines = String(text || "")
+    .split("\n")
+    .map((line) => line.trim().replace(/^·\s*/, ""))
+    .filter(Boolean);
+  lines.forEach((line) => {
+    const li = document.createElement("li");
+    li.textContent = line;
+    container.appendChild(li);
+  });
+}
+
+function renderHelp() {
+  renderHelpSnapshot();
+  fillList(els.helpQuickstart, t("help_quickstart", ""));
+  fillList(els.helpPermissions, t("help_permissions", ""));
+  fillList(els.helpFaq, t("help_faq", ""));
+  renderHelpCommands();
+}
+
+function renderHelpSnapshot() {
+  const box = els.helpSnapshot;
+  if (!box) return;
+  box.innerHTML = "";
+  const snap = state.helpSnapshot || {};
+  box.appendChild(
+    summaryItem(
+      t("help_snap_plugin", "插件总开关"),
+      onOff(snap.plugin_enabled),
+      snap.plugin_enabled === false ? "warn" : "",
+    ),
+  );
+  box.appendChild(
+    summaryItem(
+      t("help_snap_global_tts", "AstrBot 全局 TTS"),
+      onOff(snap.global_tts_enabled),
+      snap.global_tts_enabled === false ? "warn" : "",
+    ),
+  );
+  box.appendChild(
+    summaryItem(t("help_snap_runtime", "自动合成"), onOff(snap.runtime_enabled)),
+  );
+  box.appendChild(
+    summaryItem(
+      t("help_snap_engine", "全局引擎"),
+      snap.active_engine || t("summary_active_none", "未设置"),
+    ),
+  );
+  box.appendChild(
+    summaryItem(t("help_snap_bindings", "会话绑定"), snap.binding_count ?? "—"),
+  );
+  box.appendChild(
+    summaryItem(
+      t("help_snap_limit", "字数上限"),
+      `${onOff(snap.text_limit_enabled)} · ${snap.text_limit ?? "—"}`,
+    ),
+  );
+  box.appendChild(
+    summaryItem(
+      t("help_snap_admin", "管理员校验"),
+      snap.admin_only
+        ? t("help_snap_admin_on", "仅管理员")
+        : t("help_snap_admin_off", "所有人"),
+    ),
+  );
+}
+
+function renderHelpCommands() {
+  const box = els.helpCommands;
+  if (!box) return;
+  box.innerHTML = "";
+  const groups = [
+    { title: t("help_group_plain", "普通指令"), admin: false },
+    { title: t("help_group_admin", "管理员指令"), admin: true },
+  ];
+  groups.forEach((group) => {
+    const items = (state.helpCommands || []).filter(
+      (cmd) => Boolean(cmd.admin) === group.admin,
+    );
+    if (!items.length) return;
+    const head = document.createElement("h4");
+    head.className = "help-group-title";
+    head.textContent = group.title;
+    box.appendChild(head);
+    items.forEach((cmd) => box.appendChild(renderCommandCard(cmd)));
+  });
+}
+
+/**
+ * 复制文本。
+ *
+ * 视图 iframe 的 sandbox 不含 allow-same-origin，属于 opaque origin：
+ * navigator.clipboard 通常会被拒绝，因此必须保留 execCommand 兜底。
+ */
+async function copyText(text) {
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (error) {
+      /* 沙箱环境常见：继续走兜底方案 */
+    }
+  }
+  try {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    // 经典的 execCommand 兜底写法：移到视口外而不是用 opacity:0，
+    // 后者在部分浏览器里会导致选区失效、复制为空。
+    area.style.position = "fixed";
+    area.style.top = "0";
+    area.style.left = "-9999px";
+    area.style.fontSize = "12pt";
+    document.body.appendChild(area);
+    area.focus();
+    area.select();
+    area.setSelectionRange(0, area.value.length);
+    const ok = document.execCommand("copy");
+    area.remove();
+    return ok;
+  } catch (error) {
+    return false;
+  }
+}
+
+function flashCopied(chip, ok) {
+  if (!chip.dataset.original) chip.dataset.original = chip.textContent;
+  chip.textContent = ok ? t("copied", "已复制") : t("copy_failed", "复制失败");
+  chip.classList.toggle("cmd-example-copied", ok);
+  window.clearTimeout(Number(chip.dataset.timer || 0));
+  chip.dataset.timer = String(
+    window.setTimeout(() => {
+      chip.textContent = chip.dataset.original || "";
+      chip.classList.remove("cmd-example-copied");
+    }, 1200),
+  );
+}
+
+function renderCommandCard(cmd) {
+  const card = document.createElement("div");
+  card.className = "cmd-card";
+
+  const usage = document.createElement("code");
+  usage.className = "cmd-usage";
+  usage.textContent = cmd.usage || `/${cmd.name || ""}`;
+  card.appendChild(usage);
+
+  const summary = document.createElement("p");
+  summary.className = "cmd-summary";
+  summary.textContent = cmd.summary || "";
+  card.appendChild(summary);
+
+  const notes = Array.isArray(cmd.notes) ? cmd.notes.filter(Boolean) : [];
+  if (notes.length) {
+    const list = document.createElement("ul");
+    list.className = "cmd-notes";
+    notes.forEach((note) => {
+      const li = document.createElement("li");
+      li.textContent = note;
+      list.appendChild(li);
+    });
+    card.appendChild(list);
+  }
+
+  const examples = Array.isArray(cmd.examples) ? cmd.examples.filter(Boolean) : [];
+  if (examples.length) {
+    const row = document.createElement("div");
+    row.className = "cmd-examples";
+    const label = document.createElement("span");
+    label.className = "cmd-examples-label";
+    label.textContent = t("cmd_examples", "示例");
+    row.appendChild(label);
+    examples.forEach((example) => {
+      const chip = document.createElement("code");
+      chip.className = "cmd-example";
+      chip.textContent = example;
+      chip.title = t("cmd_example_hint", "点击复制");
+      chip.setAttribute("role", "button");
+      chip.tabIndex = 0;
+      const handleCopy = async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        flashCopied(chip, await copyText(example));
+      };
+      chip.addEventListener("click", handleCopy);
+      chip.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") handleCopy(event);
+      });
+      row.appendChild(chip);
+    });
+    card.appendChild(row);
+  }
+  return card;
+}
+
+/* ------------------------------------------------------------------ */
 /* 音色样本                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -1525,6 +1748,7 @@ function bindEvents() {
   els.tabSamplesBtn.addEventListener("click", () => switchTab("samples"));
   els.tabBindingsBtn.addEventListener("click", () => switchTab("bindings"));
   els.tabSettingsBtn.addEventListener("click", () => switchTab("settings"));
+  els.tabHelpBtn.addEventListener("click", () => switchTab("help"));
 
   els.btnClearBindings.addEventListener("click", () => clearBindings());
   els.btnExport.addEventListener("click", () => exportConfig());
@@ -1571,11 +1795,18 @@ async function main() {
     tabSamplesBtn: byId("tab-samples-btn"),
     tabBindingsBtn: byId("tab-bindings-btn"),
     tabSettingsBtn: byId("tab-settings-btn"),
+    tabHelpBtn: byId("tab-help-btn"),
     tabEngines: byId("tab-engines"),
     tabSamples: byId("tab-samples"),
     tabBindings: byId("tab-bindings"),
     tabSettings: byId("tab-settings"),
+    tabHelp: byId("tab-help"),
     summary: byId("summary"),
+    helpSnapshot: byId("help-snapshot"),
+    helpQuickstart: byId("help-quickstart"),
+    helpPermissions: byId("help-permissions"),
+    helpFaq: byId("help-faq"),
+    helpCommands: byId("help-commands"),
     enginesHint: byId("engines-hint"),
     samplesList: byId("samples-list"),
     samplesEmpty: byId("samples-empty"),
@@ -1605,7 +1836,7 @@ async function main() {
   byId("page-title").textContent = title;
   byId("page-desc").textContent = t(
     "description",
-    "引擎、音色样本与全局设置的统一管理界面，改动保存后立即生效。",
+    "引擎、音色样本、会话绑定、全局设置与指令帮助的统一管理界面，改动保存后立即生效。",
   );
   els.btnNew.textContent = t("new", "新建引擎");
   els.btnSave.textContent = t("save", "保存");
@@ -1615,6 +1846,14 @@ async function main() {
   els.tabSamplesBtn.textContent = t("tab_samples", "音色样本");
   els.tabBindingsBtn.textContent = t("tab_bindings", "会话绑定");
   els.tabSettingsBtn.textContent = t("tab_settings", "全局设置");
+  els.tabHelpBtn.textContent = t("tab_help", "指令与帮助");
+  fillList(els.helpQuickstart, t("help_quickstart", ""));
+  fillList(els.helpPermissions, t("help_permissions", ""));
+  fillList(els.helpFaq, t("help_faq", ""));
+  byId("help-quickstart-title").textContent = t("help_quickstart_title", "快速上手");
+  byId("help-commands-title").textContent = t("help_commands_title", "指令列表");
+  byId("help-permissions-title").textContent = t("help_permissions_title", "权限说明");
+  byId("help-faq-title").textContent = t("help_faq_title", "常见问题");
   els.btnUploadSample.textContent = t("sample_upload", "上传样本");
   els.btnSaveSettings.textContent = t("settings_save", "保存设置");
   els.btnClearBindings.textContent = t("binding_clear_all", "全部解绑");

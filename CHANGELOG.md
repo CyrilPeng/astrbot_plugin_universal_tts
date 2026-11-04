@@ -1,5 +1,29 @@
 # 更新日志
 
+## v1.3.9
+
+把帮助搬进 WebUI：用户不必再去插件页翻文档。
+
+### 新增
+
+- **「指令与帮助」页**（第 5 个标签）
+  - 顶部实时状态：插件总开关、AstrBot 全局 TTS、自动合成、全局引擎、会话绑定数、字数上限、管理员校验方式
+  - 14 条指令按「普通 / 管理员」分组的卡片，含用法、说明、备注与示例；**点击示例即可复制**（沙箱 iframe 内走 `execCommand` 兜底，复制成功会即时回显）
+  - 快速上手 4 步、权限判定说明、常见问题排查
+- **`/tts_help` 指令**：在聊天里直接查看同一份帮助，并附带当前状态摘要
+- **`metadata.yaml` 增加 `help` 字段**：市场详情页也能看到指令速查
+- **声明 `support_platforms`**：列出 14 个经源码核实、适配器确实会发送 `Record` 组件的平台（aiocqhttp / qq_official / telegram / discord / kook / lark / satori / slack / webchat / wecom / wecom_ai_bot / weixin_oc / weixin_official_account / dingtalk）；`mattermost`、`line`、`misskey` 发送形式待确认，`qq_official_webhook` 无 `Record` 处理，均未列入
+
+### 修正
+
+- 描述中「注册为 AstrBot TTS Provider」与实际实现不符（插件通过 `on_decorating_result` 钩子实现，未注册 Provider），已改为「通过消息链钩子在发送前将文本替换为语音」
+- README 中「自动接管 AstrBot TTS 管道」同步改为准确表述
+
+### 说明
+
+- 帮助内容统一由 `COMMAND_SPECS` 生成，WebUI、聊天指令、市场文案三处同源；单测会校验「已注册命令集合 == 规格表」，新增指令漏写帮助会直接失败
+- 新增 1 条 Web API 路由（共 23 条），最低 AstrBot 版本要求不变（`>= 4.25.0`）
+
 ## v1.3.8
 
 补齐 WebUI 最后一块功能空白（会话绑定），并加入防误覆盖与可追溯能力。

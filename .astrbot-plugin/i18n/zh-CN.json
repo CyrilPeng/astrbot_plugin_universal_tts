@@ -2,7 +2,7 @@
   "views": {
     "engines": {
       "title": "通用 TTS 管理",
-      "description": "引擎、音色样本与全局设置的统一管理界面，改动保存后立即生效。",
+      "description": "引擎、音色样本、会话绑定、全局设置与指令帮助的统一管理界面，改动保存后立即生效。",
       "new": "新建引擎",
       "new_title": "新建引擎",
       "edit_title": "编辑引擎",
@@ -100,7 +100,33 @@
       "import_bad_format": "文件格式不正确，需为插件配置对象",
       "history_hint": "最近 30 条配置改动记录",
       "history_refresh": "刷新",
-      "history_empty": "还没有变更记录。"
+      "history_empty": "还没有变更记录。",
+      "cmd_examples": "示例",
+      "cmd_example_hint": "点击复制",
+      "copied": "已复制",
+      "copy_failed": "复制失败",
+      "tab_help": "指令与帮助",
+      "switch_on": "开启",
+      "switch_off": "关闭",
+      "unknown": "未知",
+      "help_snap_plugin": "插件总开关",
+      "help_snap_global_tts": "AstrBot 全局 TTS",
+      "help_snap_runtime": "自动合成",
+      "help_snap_engine": "全局引擎",
+      "help_snap_bindings": "会话绑定",
+      "help_snap_limit": "字数上限",
+      "help_snap_admin": "管理员校验",
+      "help_snap_admin_on": "仅管理员",
+      "help_snap_admin_off": "所有人",
+      "help_quickstart_title": "快速上手",
+      "help_quickstart": "在「引擎」页新建一个引擎，填好服务地址与密钥\n回到引擎列表点「设为默认」，让它接管全部会话\n发送 /tts_test 或直接在群里对话，确认能收到语音\n需要给某个群换音色时，到「会话绑定」页单独指定",
+      "help_commands_title": "指令列表",
+      "help_group_plain": "普通指令",
+      "help_group_admin": "管理员指令",
+      "help_permissions_title": "权限说明",
+      "help_permissions": "管理员指令默认只有管理员能执行，判定顺序如下\n· 关闭配置项 admin_only_commands 后，所有人都能执行管理员指令\n· 在 admin_user_ids 里填写平台用户 ID，可直接执行\n· 部分平台会识别群管理员或 AstrBot 管理员身份\n· 所有指令都必须以 / 开头，不加斜杠不会响应",
+      "help_faq_title": "常见问题",
+      "help_faq": "收不到语音：先看本页顶部「插件总开关」「AstrBot 全局 TTS」「自动合成」是否都为开启\n文字太长没有语音：字数上限开启时超长回复会被跳过，可用 /tts_limit_set 调整\n只有某个群没声音：可能被 /tts_bind 0 单独禁用了，在该群发 /tts_status 查看\n改完配置没生效：WebUI 的改动会立即生效；若刚在插件配置表单里改过，页面会提示刷新，刷新一次即可"
     }
   }
 }

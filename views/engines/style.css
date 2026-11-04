@@ -545,3 +545,114 @@ input[type="checkbox"] {
   flex: 1 1 auto;
   word-break: break-word;
 }
+
+/* v1.3.9：指令与帮助页 */
+.tabs {
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.tab {
+  white-space: nowrap;
+}
+
+.help-section {
+  margin-top: 24px;
+}
+
+.help-section h3 {
+  font-size: 15px;
+  margin: 0 0 10px;
+}
+
+.help-list {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.help-commands {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.help-group-title {
+  margin: 6px 0 0;
+  font-size: 13px;
+  opacity: 0.75;
+  grid-column: 1 / -1;
+}
+
+.cmd-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cmd-usage {
+  font-size: 13px;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.cmd-summary {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.cmd-notes {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  opacity: 0.8;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cmd-examples {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.cmd-examples-label {
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.cmd-example {
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  opacity: 0.85;
+  cursor: pointer;
+  user-select: none;
+  transition: opacity 0.15s ease, border-color 0.15s ease;
+}
+
+.cmd-example:hover {
+  opacity: 1;
+}
+
+.cmd-example:focus-visible {
+  outline: 2px solid var(--accent, #4a90d9);
+  outline-offset: 1px;
+}
+
+.cmd-example-copied {
+  border-color: var(--accent, #4a90d9);
+  opacity: 1;
+  font-weight: 600;
+}

@@ -82,6 +82,141 @@ _AUDIO_MIME = {
 _PLAYABLE_FORMATS = {"wav", "mp3", "mpeg", "ogg", "opus", "flac", "aac"}
 
 
+# ---------------------------------------------------------------------------
+# 指令说明（唯一数据源）
+#
+# WebUI 的「指令与帮助」页、聊天里的 /tts_help、以及 metadata.yaml 的 help 字段
+# 都从这里生成。新增指令时必须同步登记，否则单测会直接失败，避免文档悄悄过期。
+# ---------------------------------------------------------------------------
+COMMAND_SPECS: list[dict] = [
+    {
+        "name": "tts_help",
+        "usage": "/tts_help",
+        "summary": "查看指令帮助与当前运行状态",
+        "admin": False,
+        "examples": ["/tts_help"],
+        "notes": ["WebUI 里「指令与帮助」页有同样内容，并会显示更完整的实时状态"],
+    },
+    {
+        "name": "tts_status",
+        "usage": "/tts_status",
+        "summary": "查看总开关、全局默认引擎与当前会话状态",
+        "admin": False,
+        "examples": ["/tts_status"],
+        "notes": [],
+    },
+    {
+        "name": "tts_engines",
+        "usage": "/tts_engines",
+        "summary": "列出全部引擎实例与编号，并标出当前会话用的是哪个",
+        "admin": False,
+        "examples": ["/tts_engines"],
+        "notes": ["编号从 1 开始，供 /tts_switch 与 /tts_bind 使用"],
+    },
+    {
+        "name": "tts_bind",
+        "usage": "/tts_bind [序号或实例名]",
+        "summary": "让当前会话固定使用某个引擎",
+        "admin": False,
+        "examples": ["/tts_bind", "/tts_bind 2", "/tts_bind 紫苏九月", "/tts_bind 0"],
+        "notes": [
+            "不带参数：只查看当前会话的绑定状态",
+            "填 0：本会话不再合成语音",
+            "用 /tts_unbind 恢复为跟随全局默认",
+        ],
+    },
+    {
+        "name": "tts_unbind",
+        "usage": "/tts_unbind",
+        "summary": "解除当前会话的绑定，恢复跟随全局默认引擎",
+        "admin": False,
+        "examples": ["/tts_unbind"],
+        "notes": [],
+    },
+    {
+        "name": "tts_test",
+        "usage": "/tts_test [文本]",
+        "summary": "立即合成一条语音发到当前会话，用于验证配置是否可用",
+        "admin": False,
+        "examples": ["/tts_test", "/tts_test 你好，测试一下音色"],
+        "notes": [
+            "不填文本时使用「你好，这是一条 TTS 测试消息。」",
+            "需要 AstrBot 全局 TTS 开关处于开启状态",
+        ],
+    },
+    {
+        "name": "tts_switch",
+        "usage": "/tts_switch [序号或实例名]",
+        "summary": "切换全局默认引擎",
+        "admin": True,
+        "examples": ["/tts_switch", "/tts_switch 1", "/tts_switch 0"],
+        "notes": [
+            "不带参数：列出全部引擎及当前状态",
+            "填 0：关闭全局默认 TTS，已单独绑定的会话不受影响",
+        ],
+    },
+    {
+        "name": "tts_bindings",
+        "usage": "/tts_bindings",
+        "summary": "列出所有会话的引擎绑定",
+        "admin": True,
+        "examples": ["/tts_bindings"],
+        "notes": ["WebUI 的「会话绑定」页可以逐条改绑或解绑"],
+    },
+    {
+        "name": "tts_unbind_all",
+        "usage": "/tts_unbind_all",
+        "summary": "清除全部会话绑定",
+        "admin": True,
+        "examples": ["/tts_unbind_all"],
+        "notes": ["清除后所有会话都跟随全局默认引擎"],
+    },
+    {
+        "name": "tts_off",
+        "usage": "/tts_off",
+        "summary": "暂停所有会话的自动语音合成",
+        "admin": True,
+        "examples": ["/tts_off"],
+        "notes": ["不会改动会话绑定，用 /tts_on 按原样恢复"],
+    },
+    {
+        "name": "tts_on",
+        "usage": "/tts_on",
+        "summary": "恢复所有会话的自动语音合成",
+        "admin": True,
+        "examples": ["/tts_on"],
+        "notes": [],
+    },
+    {
+        "name": "tts_limit_on",
+        "usage": "/tts_limit_on",
+        "summary": "开启文本长度上限，超长回复不再合成语音",
+        "admin": True,
+        "examples": ["/tts_limit_on"],
+        "notes": ["上限值用 /tts_limit_set 调整，也可在 WebUI「全局设置」页修改"],
+    },
+    {
+        "name": "tts_limit_off",
+        "usage": "/tts_limit_off",
+        "summary": "关闭文本长度上限",
+        "admin": True,
+        "examples": ["/tts_limit_off"],
+        "notes": [],
+    },
+    {
+        "name": "tts_limit_set",
+        "usage": "/tts_limit_set [数字]",
+        "summary": "设置文本长度上限",
+        "admin": True,
+        "examples": ["/tts_limit_set", "/tts_limit_set 80"],
+        "notes": [
+            "不带参数：显示当前上限与开关状态",
+            "必须是大于 0 的整数",
+        ],
+    },
+]
+
+
 def _is_slash(event: AstrMessageEvent) -> bool:
     """判断原始消息是否以斜杠开头（强制要求斜杠指令）"""
     raw = getattr(event.message_obj, "message_str", "") or ""
@@ -168,7 +303,7 @@ def _read_plugin_version(fallback: str = "0.0.0") -> str:
     "astrbot_plugin_universal_tts",
     "某不科学的高数",
     "通用 TTS 插件，支持多引擎切换，通过钩子拦截实现 TTS",
-    _read_plugin_version("1.3.8"),
+    _read_plugin_version("1.3.9"),
 )
 class UniversalTTSPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -977,6 +1112,13 @@ class UniversalTTSPlugin(Star):
         ]
         yield event.plain_result("\n".join(lines))
 
+    @filter.command("tts_help")
+    async def show_help(self, event: AstrMessageEvent):
+        """查看指令帮助。用法: /tts_help"""
+        if not _is_slash(event):
+            return
+        yield event.plain_result(self._render_help_text())
+
     @filter.command("tts_limit_on")
     async def enable_limit(self, event: AstrMessageEvent):
         """开启 TTS 字数上限。用法: /tts_limit_on"""
@@ -1073,6 +1215,7 @@ class UniversalTTSPlugin(Star):
             (f"{prefix}/config/export", self.web_export_config, ["GET"], "导出插件配置"),
             (f"{prefix}/config/import", self.web_import_config, ["POST"], "导入插件配置"),
             (f"{prefix}/history", self.web_list_history, ["GET"], "查看最近变更"),
+            (f"{prefix}/help", self.web_get_help, ["GET"], "读取指令帮助与运行状态"),
         )
         for route, handler, methods, desc in apis:
             try:
@@ -2035,6 +2178,70 @@ class UniversalTTSPlugin(Star):
                 else active in names
             ),
         }
+
+    # ------------------------------------------------------------------
+    # 指令帮助
+    # ------------------------------------------------------------------
+
+    def _help_snapshot(self) -> dict:
+        """帮助页顶部的实时状态，避免文档与真实配置脱节。"""
+        switches = self._runtime_switches()
+        return {
+            "plugin_enabled": switches.get("plugin_enabled"),
+            "global_tts_enabled": switches.get("global_tts_enabled"),
+            "runtime_enabled": self._runtime_enabled,
+            "active_engine": self._global_engine_name(),
+            "engine_count": len(self._list_engines()),
+            "binding_count": len(self._session_bindings),
+            "text_limit": int(self.config.get("tts_text_limit", 50) or 0),
+            "text_limit_enabled": bool(self.config.get("tts_text_limit_enable", False)),
+            "admin_only": bool(self.config.get("admin_only_commands", True)),
+            "admin_count": len(
+                [
+                    item
+                    for item in (self.config.get("admin_user_ids") or [])
+                    if str(item).strip()
+                ]
+            ),
+        }
+
+    def _render_help_text(self) -> str:
+        """/tts_help 的纯文本输出，与 WebUI 帮助页共用 COMMAND_SPECS。"""
+        snap = self._help_snapshot()
+        lines = [
+            "通用 TTS 指令（均需以 / 开头）",
+            "",
+            f"当前状态：{'已启用' if snap['plugin_enabled'] else '已停用'}"
+            f" · 全局引擎 {snap['active_engine']}"
+            f" · 会话绑定 {snap['binding_count']} 个"
+            f" · 字数上限 {'开启' if snap['text_limit_enabled'] else '关闭'}",
+            "",
+            "—— 普通指令 ——",
+        ]
+        for spec in COMMAND_SPECS:
+            if spec["admin"]:
+                continue
+            lines.append(spec["usage"])
+            lines.append(f"  {spec['summary']}")
+            for note in spec["notes"]:
+                lines.append(f"  · {note}")
+        lines.append("")
+        lines.append("—— 管理员指令 ——")
+        for spec in COMMAND_SPECS:
+            if not spec["admin"]:
+                continue
+            lines.append(spec["usage"])
+            lines.append(f"  {spec['summary']}")
+            for note in spec["notes"]:
+                lines.append(f"  · {note}")
+        lines.append("")
+        lines.append("提示：管理员指令在 WebUI 里都有对应的可视化操作。")
+        return "\n".join(lines)
+
+    async def web_get_help(self):
+        return json_response(
+            {"commands": COMMAND_SPECS, "snapshot": self._help_snapshot()}
+        )
 
     # ------------------------------------------------------------------
     # 会话绑定

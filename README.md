@@ -8,7 +8,7 @@
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-blue?style=flat-square)](https://github.com/AstrBotDevs/AstrBot)
 [![License](https://img.shields.io/badge/License-AGPL--3.0-green?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.3.8-orange?style=flat-square)]()
+[![Version](https://img.shields.io/badge/Version-1.3.9-orange?style=flat-square)]()
 
 一个为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 打造的通用语音合成插件。
 支持多种引擎，覆盖国内外主流 TTS 服务，还能自定义接入任意 HTTP API。
@@ -19,11 +19,12 @@
 
 ## ✨ 亮点
 
-- 🎯 **即插即用** — 自动接管 AstrBot TTS 管道，零配置冲突
+- 🎯 **即插即用** — 通过消息链钩子在发送前把文本替换为语音，零配置冲突
+- 🌐 **跨平台** — 经源码核实支持 14 个平台适配器：aiocqhttp · QQ 官方机器人 · Telegram · Discord · KOOK · 飞书 · Satori · Slack · WebChat · 企业微信 · 企业微信智能机器人 · 微信客服 · 微信公众号 · 钉钉（aiocqhttp 为生产实测，其余依据适配器的 `Record` 发送实现判定）
 - 🔄 **热切换** — 运行时可一条指令切换引擎，无需手动进入后台重启
 - 🌍 **多引擎覆盖** — MiMo · OpenAI · 火山引擎 · 阿里云 · Azure · ElevenLabs
 - 🛠️ **万能适配** — 自定义 HTTP 引擎，模板化接入任何 TTS API
-- 🎨 **WebUI 完整管理页** — 插件详情页内置四标签视图：引擎增删改查/排序/试听、音色样本上传下载重命名、会话绑定管理、全局设置与变更历史，另支持配置导入导出，保存即生效
+- 🎨 **WebUI 完整管理页** — 插件详情页内置五标签视图（含指令与帮助）：引擎增删改查/排序/试听、音色样本上传下载重命名、会话绑定管理、全局设置与变更历史，另支持配置导入导出，保存即生效
 
 ---
 

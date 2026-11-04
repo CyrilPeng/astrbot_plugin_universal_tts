@@ -38,6 +38,9 @@
         <button id="tab-settings-btn" class="tab" type="button" role="tab" data-tab="settings">
           全局设置
         </button>
+        <button id="tab-help-btn" class="tab" type="button" role="tab" data-tab="help">
+          指令与帮助
+        </button>
       </nav>
 
       <section id="tab-engines" class="tab-panel" role="tabpanel">
@@ -91,6 +94,30 @@
             <button id="btn-refresh-history" class="btn" type="button">刷新</button>
           </div>
           <div id="history-list" class="history-list"></div>
+        </div>
+      </section>
+
+      <section id="tab-help" class="tab-panel" role="tabpanel" hidden>
+        <div id="help-snapshot" class="summary"></div>
+
+        <div class="help-section">
+          <h3 id="help-quickstart-title">快速上手</h3>
+          <ul id="help-quickstart" class="help-list"></ul>
+        </div>
+
+        <div class="help-section">
+          <h3 id="help-commands-title">指令列表</h3>
+          <div id="help-commands" class="help-commands"></div>
+        </div>
+
+        <div class="help-section">
+          <h3 id="help-permissions-title">权限说明</h3>
+          <ul id="help-permissions" class="help-list"></ul>
+        </div>
+
+        <div class="help-section">
+          <h3 id="help-faq-title">常见问题</h3>
+          <ul id="help-faq" class="help-list"></ul>
         </div>
       </section>
     </div>
