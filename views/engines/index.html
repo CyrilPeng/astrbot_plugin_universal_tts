@@ -32,12 +32,16 @@
         <button id="tab-samples-btn" class="tab" type="button" role="tab" data-tab="samples">
           音色样本
         </button>
+        <button id="tab-bindings-btn" class="tab" type="button" role="tab" data-tab="bindings">
+          会话绑定
+        </button>
         <button id="tab-settings-btn" class="tab" type="button" role="tab" data-tab="settings">
           全局设置
         </button>
       </nav>
 
       <section id="tab-engines" class="tab-panel" role="tabpanel">
+        <div id="summary" class="summary"></div>
         <div class="panel-head">
           <p id="engines-hint" class="muted"></p>
           <button id="btn-new" class="btn btn-primary" type="button">新建引擎</button>
@@ -55,12 +59,39 @@
         <p id="samples-empty" class="empty" hidden></p>
       </section>
 
+      <section id="tab-bindings" class="tab-panel" role="tabpanel" hidden>
+        <div class="panel-head">
+          <p id="bindings-hint" class="muted"></p>
+          <button id="btn-clear-bindings" class="btn btn-danger" type="button">全部解绑</button>
+        </div>
+        <div id="bindings-list" class="list" role="list"></div>
+        <p id="bindings-empty" class="empty" hidden></p>
+      </section>
+
       <section id="tab-settings" class="tab-panel" role="tabpanel" hidden>
         <div class="panel-head">
           <p id="settings-hint" class="muted"></p>
-          <button id="btn-save-settings" class="btn btn-primary" type="button">保存设置</button>
+          <div class="head-actions">
+            <label class="inline-check">
+              <input id="export-secrets" type="checkbox" />
+              <span id="export-secrets-label">含密钥</span>
+            </label>
+            <button id="btn-export" class="btn" type="button">导出</button>
+            <button id="btn-import" class="btn" type="button">导入</button>
+            <button id="btn-save-settings" class="btn btn-primary" type="button">
+              保存设置
+            </button>
+          </div>
         </div>
         <div id="settings-fields" class="fields"></div>
+
+        <div class="history-block">
+          <div class="panel-head">
+            <p id="history-hint" class="muted"></p>
+            <button id="btn-refresh-history" class="btn" type="button">刷新</button>
+          </div>
+          <div id="history-list" class="history-list"></div>
+        </div>
       </section>
     </div>
 

@@ -14,6 +14,11 @@ const state = {
   templates: {},
   samples: [],
   settings: null,
+  bindings: [],
+  bindingEngines: [],
+  history: [],
+  status: null,
+  token: "",
   plugin_enabled: null,
   global_tts_enabled: null,
 };
@@ -149,7 +154,93 @@ function applyPayload(data) {
   if (data.templates && typeof data.templates === "object") {
     state.templates = data.templates;
   }
+  if (data.token) state.token = String(data.token);
+  if (data.status && typeof data.status === "object") state.status = data.status;
   renderList();
+  renderSummary();
+}
+
+/* ------------------------------------------------------------------ */
+/* 配置指纹与错误处理                                                  */
+/* ------------------------------------------------------------------ */
+
+const STALE_HINTS = ["配置已被其他方式修改", "请刷新页面后重试", "请刷新后重试"];
+
+function isStaleError(message) {
+  const text = String(message || "");
+  return STALE_HINTS.some((hint) => text.includes(hint));
+}
+
+/** 给写操作带上配置指纹，供后端做双入口冲突检测。 */
+function withToken(payload) {
+  const body = Object.assign({}, payload || {});
+  if (state.token) body.token = state.token;
+  return body;
+}
+
+async function reportError(error, scope) {
+  const message = error && error.message ? error.message : String(error);
+  if (isStaleError(message) && scope === "inline") {
+    setEditorError(message);
+  } else {
+    setEditorError("");
+    setBanner(message, "error");
+  }
+  if (isStaleError(message)) {
+    // 配置已被别处改过，重新拉一遍保证界面与真实状态一致
+    try {
+      await loadEngines();
+    } catch (reloadError) {
+      /* 忽略：已经把错误提示给用户了 */
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 状态总览                                                            */
+/* ------------------------------------------------------------------ */
+
+function summaryItem(label, value, kind) {
+  const wrap = document.createElement("div");
+  wrap.className = "summary-item" + (kind ? ` summary-${kind}` : "");
+  const name = document.createElement("span");
+  name.className = "summary-label";
+  name.textContent = label;
+  const val = document.createElement("span");
+  val.className = "summary-value";
+  val.textContent = String(value);
+  wrap.appendChild(name);
+  wrap.appendChild(val);
+  return wrap;
+}
+
+function renderSummary() {
+  const box = els.summary;
+  if (!box) return;
+  box.innerHTML = "";
+  const status = state.status || {};
+  const active = String(status.active_engine || state.active_engine || "");
+  let activeLabel;
+  if (active === state.disabled_engine) {
+    activeLabel = t("summary_active_off", "已关闭");
+  } else if (active) {
+    activeLabel = active;
+  } else {
+    activeLabel = t("summary_active_none", "未设置");
+  }
+  const missing = status.active_engine_exists === false;
+  box.appendChild(
+    summaryItem(t("summary_active", "当前默认引擎"), activeLabel, missing ? "warn" : ""),
+  );
+  box.appendChild(
+    summaryItem(t("summary_engines", "引擎"), status.engine_count ?? state.engines.length),
+  );
+  box.appendChild(
+    summaryItem(t("summary_bindings", "会话绑定"), status.binding_count ?? "—"),
+  );
+  box.appendChild(
+    summaryItem(t("summary_samples", "音色样本"), status.sample_count ?? "—"),
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -345,6 +436,18 @@ function renderRow(engine, index) {
 
   const actions = document.createElement("div");
   actions.className = "row-actions";
+
+  const upBtn = makeButton(t("move_up", "↑"), "btn btn-icon", () => moveEngine(index, -1));
+  upBtn.title = t("move_up_title", "上移");
+  upBtn.disabled = index === 0;
+  actions.appendChild(upBtn);
+
+  const downBtn = makeButton(t("move_down", "↓"), "btn btn-icon", () =>
+    moveEngine(index, 1),
+  );
+  downBtn.title = t("move_down_title", "下移");
+  downBtn.disabled = index >= state.engines.length - 1;
+  actions.appendChild(downBtn);
 
   const previewBtn = makeButton(t("preview", "试听"), "btn", () => {
     runPreview({ index }, previewBtn);
@@ -562,11 +665,10 @@ function renderSampleField(key, spec, value) {
   return wrap;
 }
 
-function pickFile(onPicked) {
+function pickFile(onPicked, accept) {
   if (!fileInput) {
     fileInput = document.createElement("input");
     fileInput.type = "file";
-    fileInput.accept = ".mp3,.wav,audio/mpeg,audio/wav";
     fileInput.style.display = "none";
     document.body.appendChild(fileInput);
     fileInput.addEventListener("change", async () => {
@@ -576,6 +678,7 @@ function pickFile(onPicked) {
       await fileInput._onPicked(file);
     });
   }
+  fileInput.accept = accept || ".mp3,.wav,audio/mpeg,audio/wav";
   fileInput._onPicked = onPicked;
   fileInput.click();
 }
@@ -615,10 +718,10 @@ async function renameSample(sample, rawName) {
     return;
   }
   try {
-    const data = await bridge.apiPost("samples/rename", {
-      path: sample.path,
-      new_name: next,
-    });
+    const data = await bridge.apiPost(
+      "samples/rename",
+      withToken({ path: sample.path, new_name: next }),
+    );
     state.samples = Array.isArray(data.samples) ? data.samples : state.samples;
     renamingPath = null;
     renderSamples();
@@ -645,7 +748,10 @@ async function deleteSampleEntry(sample) {
   );
   if (!ok) return;
   try {
-    const data = await bridge.apiPost("samples/delete", { path: sample.path });
+    const data = await bridge.apiPost(
+      "samples/delete",
+      withToken({ path: sample.path }),
+    );
     state.samples = Array.isArray(data.samples) ? data.samples : [];
     renderSamples();
     setBanner(t("sample_deleted", "已删除样本 {name}", { name: sample.name }), "ok");
@@ -717,14 +823,28 @@ async function loadEngines() {
   }
 }
 
+async function moveEngine(index, delta) {
+  const target = index + delta;
+  if (target < 0 || target >= state.engines.length) return;
+  const order = state.engines.map((_, i) => i);
+  const [moved] = order.splice(index, 1);
+  order.splice(target, 0, moved);
+  setBanner("");
+  try {
+    applyPayload(await bridge.apiPost("engines/reorder", withToken({ order })));
+  } catch (error) {
+    await reportError(error);
+  }
+}
+
 async function activateEngine(index) {
   const name = engineName(state.engines[index]);
   if (!name) return;
   setBanner("");
   try {
-    applyPayload(await bridge.apiPost("engines/activate", { name }));
+    applyPayload(await bridge.apiPost("engines/activate", withToken({ name })));
   } catch (error) {
-    setBanner(error && error.message ? error.message : String(error), "error");
+    await reportError(error);
   }
 }
 
@@ -732,13 +852,13 @@ async function cloneEngine(index) {
   const source = engineName(state.engines[index]);
   setBanner("");
   try {
-    applyPayload(await bridge.apiPost("engines/clone", { index }));
+    applyPayload(await bridge.apiPost("engines/clone", withToken({ index })));
     setBanner(
       t("cloned", "已复制「{name}」，记得修改实例名称。", { name: source }),
       "ok",
     );
   } catch (error) {
-    setBanner(error && error.message ? error.message : String(error), "error");
+    await reportError(error);
   }
 }
 
@@ -751,9 +871,9 @@ async function deleteEngine(index) {
   if (!ok) return;
   setBanner("");
   try {
-    applyPayload(await bridge.apiPost("engines/delete", { index }));
+    applyPayload(await bridge.apiPost("engines/delete", withToken({ index })));
   } catch (error) {
-    setBanner(error && error.message ? error.message : String(error), "error");
+    await reportError(error);
   }
 }
 
@@ -773,12 +893,12 @@ async function saveEditor() {
   setEditorError("");
   els.btnSave.disabled = true;
   try {
-    const data = await bridge.apiPost("engines/save", payload);
+    const data = await bridge.apiPost("engines/save", withToken(payload));
     applyPayload(data);
     els.editor.close();
     setBanner(t("saved", "已保存"), "ok");
   } catch (error) {
-    setEditorError(error && error.message ? error.message : String(error));
+    await reportError(error, "inline");
   } finally {
     els.btnSave.disabled = false;
   }
@@ -792,7 +912,7 @@ async function saveEditor() {
 /* 标签页                                                              */
 /* ------------------------------------------------------------------ */
 
-const TABS = ["engines", "samples", "settings"];
+const TABS = ["engines", "samples", "bindings", "settings"];
 let currentTab = "engines";
 let renamingPath = null;
 
@@ -804,12 +924,24 @@ function formatSize(bytes) {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function formatTime(ts) {
+  const value = Number(ts || 0) * 1000;
+  if (!value) return "";
+  const date = new Date(value);
+  const pad = (n) => String(n).padStart(2, "0");
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+    `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+  );
+}
+
 async function switchTab(name) {
   if (!TABS.includes(name)) return;
   currentTab = name;
   const map = {
     engines: [els.tabEnginesBtn, els.tabEngines],
     samples: [els.tabSamplesBtn, els.tabSamples],
+    bindings: [els.tabBindingsBtn, els.tabBindings],
     settings: [els.tabSettingsBtn, els.tabSettings],
   };
   for (const [key, pair] of Object.entries(map)) {
@@ -822,9 +954,312 @@ async function switchTab(name) {
   if (name === "samples") {
     await loadSamples();
     renderSamples();
+  } else if (name === "bindings") {
+    await loadBindings();
   } else if (name === "settings") {
     await loadSettings();
+    await loadHistory();
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* 会话绑定                                                            */
+/* ------------------------------------------------------------------ */
+
+async function loadBindings() {
+  els.bindingsList.innerHTML = "";
+  try {
+    const data = await bridge.apiGet("bindings");
+    state.bindings = Array.isArray(data.bindings) ? data.bindings : [];
+    state.bindingEngines = Array.isArray(data.engines) ? data.engines : [];
+    if (data.token) state.token = String(data.token);
+    renderBindings();
+  } catch (error) {
+    await reportError(error);
+  }
+}
+
+function renderBindings() {
+  const list = els.bindingsList;
+  list.innerHTML = "";
+  if (!state.bindings.length) {
+    els.bindingsEmpty.hidden = false;
+    els.bindingsEmpty.textContent = t(
+      "bindings_empty",
+      "当前没有会话绑定，所有会话都跟随全局引擎。",
+    );
+    return;
+  }
+  els.bindingsEmpty.hidden = true;
+  state.bindings.forEach((binding) => list.appendChild(renderBindingRow(binding)));
+}
+
+function renderBindingRow(binding) {
+  const row = document.createElement("div");
+  row.className = "row" + (binding.exists ? "" : " row-warn");
+  row.setAttribute("role", "listitem");
+
+  const main = document.createElement("div");
+  main.className = "row-main";
+
+  const name = document.createElement("div");
+  name.className = "row-name";
+  const nameText = document.createElement("span");
+  nameText.className = "row-name-text";
+  nameText.textContent = binding.display || binding.session_id;
+  name.appendChild(nameText);
+  if (!binding.exists) {
+    const badge = document.createElement("span");
+    badge.className = "badge badge-danger";
+    badge.textContent = t("binding_missing", "引擎已删除");
+    name.appendChild(badge);
+  }
+  main.appendChild(name);
+
+  const meta = document.createElement("div");
+  meta.className = "row-meta";
+  meta.textContent = binding.session_id;
+  main.appendChild(meta);
+  row.appendChild(main);
+
+  const actions = document.createElement("div");
+  actions.className = "row-actions";
+
+  const select = document.createElement("select");
+  const followOption = document.createElement("option");
+  followOption.value = "";
+  followOption.textContent = t("binding_follow", "跟随全局引擎");
+  select.appendChild(followOption);
+
+  const offOption = document.createElement("option");
+  offOption.value = state.disabled_engine;
+  offOption.textContent = t("binding_off", "不合成语音");
+  select.appendChild(offOption);
+
+  (state.bindingEngines || []).forEach((engineNameValue) => {
+    const option = document.createElement("option");
+    option.value = engineNameValue;
+    option.textContent = engineNameValue;
+    select.appendChild(option);
+  });
+
+  const current = String(binding.target || "");
+  select.value = current;
+  if (current && select.value !== current) {
+    // 指向已被删除的引擎，补一个占位项，避免下拉自动跳到第一项
+    const option = document.createElement("option");
+    option.value = current;
+    option.textContent = `${current} ${t("binding_missing", "引擎已删除")}`;
+    select.appendChild(option);
+    select.value = current;
+  }
+  select.addEventListener("change", () => setBinding(binding.session_id, select.value));
+  actions.appendChild(select);
+
+  actions.appendChild(
+    makeButton(t("binding_unbind", "解除绑定"), "btn btn-danger", () =>
+      deleteBinding(binding),
+    ),
+  );
+  row.appendChild(actions);
+  return row;
+}
+
+function applyBindingsPayload(data) {
+  state.bindings = Array.isArray(data.bindings) ? data.bindings : [];
+  if (Array.isArray(data.engines)) state.bindingEngines = data.engines;
+  if (data.token) state.token = String(data.token);
+  renderBindings();
+}
+
+async function setBinding(sessionId, target) {
+  setBanner("");
+  try {
+    const data = await bridge.apiPost("bindings/set", {
+      session_id: sessionId,
+      target,
+    });
+    applyBindingsPayload(data);
+    setBanner(
+      target
+        ? t("binding_saved", "已更新会话绑定")
+        : t("binding_cleared", "已恢复为跟随全局引擎"),
+      "ok",
+    );
+    await loadEngines();
+  } catch (error) {
+    await reportError(error);
+    await loadBindings();
+  }
+}
+
+async function deleteBinding(binding) {
+  const ok = await askConfirm(
+    t("binding_confirm_delete", "解除「{name}」的绑定？", {
+      name: binding.display || binding.session_id,
+    }),
+    t("binding_unbind", "解除绑定"),
+  );
+  if (!ok) return;
+  try {
+    const data = await bridge.apiPost("bindings/delete", {
+      session_id: binding.session_id,
+    });
+    applyBindingsPayload(data);
+    setBanner(t("binding_removed", "已解除绑定"), "ok");
+    await loadEngines();
+  } catch (error) {
+    await reportError(error);
+    await loadBindings();
+  }
+}
+
+async function clearBindings() {
+  if (!state.bindings.length) return;
+  const ok = await askConfirm(
+    t("binding_confirm_clear", "确定清空全部 {count} 条会话绑定？", {
+      count: state.bindings.length,
+    }),
+    t("binding_clear_all", "全部解绑"),
+  );
+  if (!ok) return;
+  try {
+    const data = await bridge.apiPost("bindings/clear", {});
+    applyBindingsPayload(data);
+    setBanner(t("binding_all_removed", "已清空全部会话绑定"), "ok");
+    await loadEngines();
+  } catch (error) {
+    await reportError(error);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 配置导入 / 导出                                                     */
+/* ------------------------------------------------------------------ */
+
+function downloadText(filename, text) {
+  // 视图 iframe 带 allow-downloads，Blob + <a download> 可用
+  const blob = new Blob([text], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+async function exportConfig() {
+  const includeSecrets = Boolean(els.exportSecrets && els.exportSecrets.checked);
+  if (includeSecrets) {
+    const ok = await askConfirm(
+      t(
+        "export_confirm_secrets",
+        "导出的配置将包含明文 API Key 等密钥，请确认保存位置安全。继续？",
+      ),
+      t("export_action", "导出"),
+    );
+    if (!ok) return;
+  }
+  try {
+    const data = await bridge.apiGet("config/export", {
+      include_secrets: includeSecrets ? 1 : 0,
+    });
+    const stamp = formatTime(Math.floor(Date.now() / 1000))
+      .replace(/[:\s]/g, "-")
+      .replace(/-+/g, "-");
+    downloadText(`universal-tts-config-${stamp}.json`, JSON.stringify(data, null, 2));
+    setBanner(
+      includeSecrets
+        ? t("export_ok_secrets", "配置已导出（含密钥），请妥善保管")
+        : t("export_ok", "配置已导出（已脱敏）"),
+      "ok",
+    );
+    await loadHistory();
+  } catch (error) {
+    await reportError(error);
+  }
+}
+
+async function importConfig(file) {
+  if (!file) return;
+  let parsed;
+  try {
+    parsed = JSON.parse(await file.text());
+  } catch (error) {
+    setBanner(t("import_bad_json", "文件不是合法的 JSON"), "error");
+    return;
+  }
+  const config =
+    parsed && typeof parsed.config === "object" && parsed.config !== null
+      ? parsed.config
+      : parsed;
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    setBanner(t("import_bad_format", "文件格式不正确，需为插件配置对象"), "error");
+    return;
+  }
+  const count = Object.keys(config).length;
+  const ok = await askConfirm(
+    t("import_confirm", "将导入 {count} 个配置项，现有同名配置会被覆盖。确定继续？", {
+      count,
+    }),
+    t("import_action", "导入"),
+  );
+  if (!ok) return;
+  try {
+    const data = await bridge.apiPost("config/import", { config });
+    state.settings = data;
+    if (data.token) state.token = String(data.token);
+    renderSettings();
+    const applied = Array.isArray(data.imported) ? data.imported.length : 0;
+    setBanner(t("import_ok", "已导入 {count} 项配置", { count: applied }), "ok");
+    await loadEngines();
+    await loadHistory();
+  } catch (error) {
+    await reportError(error);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 变更历史                                                            */
+/* ------------------------------------------------------------------ */
+
+async function loadHistory() {
+  if (!els.historyList) return;
+  try {
+    const data = await bridge.apiGet("history", { limit: 30 });
+    state.history = Array.isArray(data.entries) ? data.entries : [];
+    renderHistory();
+  } catch (error) {
+    els.historyList.textContent = error && error.message ? error.message : String(error);
+  }
+}
+
+function renderHistory() {
+  const box = els.historyList;
+  if (!box) return;
+  box.innerHTML = "";
+  if (!state.history.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty";
+    empty.textContent = t("history_empty", "还没有变更记录。");
+    box.appendChild(empty);
+    return;
+  }
+  state.history.forEach((entry) => {
+    const line = document.createElement("div");
+    line.className = "history-row";
+    const when = document.createElement("span");
+    when.className = "history-time";
+    when.textContent = entry.time || formatTime(entry.ts);
+    const what = document.createElement("span");
+    what.className = "history-detail";
+    what.textContent = entry.detail || entry.action || "";
+    line.appendChild(when);
+    line.appendChild(what);
+    box.appendChild(line);
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -945,6 +1380,7 @@ async function loadSettings() {
   try {
     const data = await bridge.apiGet("settings");
     state.settings = data;
+    if (data && data.token) state.token = String(data.token);
     renderSettings();
   } catch (error) {
     setBanner(error && error.message ? error.message : String(error), "error");
@@ -1035,13 +1471,15 @@ async function saveSettings() {
   const original = els.btnSaveSettings.textContent;
   els.btnSaveSettings.textContent = t("saving", "保存中…");
   try {
-    const data = await bridge.apiPost("settings/save", { values });
+    const data = await bridge.apiPost("settings/save", withToken({ values }));
     state.settings = data;
+    if (data.token) state.token = String(data.token);
     renderSettings();
     setBanner(t("settings_saved", "设置已保存并即时生效"), "ok");
     await loadEngines();
+    await loadHistory();
   } catch (error) {
-    setBanner(error && error.message ? error.message : String(error), "error");
+    await reportError(error);
   } finally {
     els.btnSaveSettings.disabled = false;
     els.btnSaveSettings.textContent = original;
@@ -1085,7 +1523,15 @@ function bindEvents() {
 
   els.tabEnginesBtn.addEventListener("click", () => switchTab("engines"));
   els.tabSamplesBtn.addEventListener("click", () => switchTab("samples"));
+  els.tabBindingsBtn.addEventListener("click", () => switchTab("bindings"));
   els.tabSettingsBtn.addEventListener("click", () => switchTab("settings"));
+
+  els.btnClearBindings.addEventListener("click", () => clearBindings());
+  els.btnExport.addEventListener("click", () => exportConfig());
+  els.btnImport.addEventListener("click", () =>
+    pickFile((file) => importConfig(file), ".json,application/json"),
+  );
+  els.btnRefreshHistory.addEventListener("click", () => loadHistory());
 
   els.btnUploadSample.addEventListener("click", () => {
     pickFile((file) => uploadSampleFile(file));
@@ -1123,18 +1569,32 @@ async function main() {
     confirmCancel: byId("confirm-cancel"),
     tabEnginesBtn: byId("tab-engines-btn"),
     tabSamplesBtn: byId("tab-samples-btn"),
+    tabBindingsBtn: byId("tab-bindings-btn"),
     tabSettingsBtn: byId("tab-settings-btn"),
     tabEngines: byId("tab-engines"),
     tabSamples: byId("tab-samples"),
+    tabBindings: byId("tab-bindings"),
     tabSettings: byId("tab-settings"),
+    summary: byId("summary"),
     enginesHint: byId("engines-hint"),
     samplesList: byId("samples-list"),
     samplesEmpty: byId("samples-empty"),
     samplesHint: byId("samples-hint"),
     btnUploadSample: byId("btn-upload-sample"),
+    bindingsList: byId("bindings-list"),
+    bindingsEmpty: byId("bindings-empty"),
+    bindingsHint: byId("bindings-hint"),
+    btnClearBindings: byId("btn-clear-bindings"),
     settingsFields: byId("settings-fields"),
     settingsHint: byId("settings-hint"),
     btnSaveSettings: byId("btn-save-settings"),
+    btnExport: byId("btn-export"),
+    btnImport: byId("btn-import"),
+    exportSecrets: byId("export-secrets"),
+    exportSecretsLabel: byId("export-secrets-label"),
+    historyList: byId("history-list"),
+    historyHint: byId("history-hint"),
+    btnRefreshHistory: byId("btn-refresh-history"),
   });
 
   bindEvents();
@@ -1153,9 +1613,20 @@ async function main() {
   els.btnPreview.textContent = t("preview", "试听");
   els.tabEnginesBtn.textContent = t("tab_engines", "引擎");
   els.tabSamplesBtn.textContent = t("tab_samples", "音色样本");
+  els.tabBindingsBtn.textContent = t("tab_bindings", "会话绑定");
   els.tabSettingsBtn.textContent = t("tab_settings", "全局设置");
   els.btnUploadSample.textContent = t("sample_upload", "上传样本");
   els.btnSaveSettings.textContent = t("settings_save", "保存设置");
+  els.btnClearBindings.textContent = t("binding_clear_all", "全部解绑");
+  els.btnExport.textContent = t("export", "导出");
+  els.btnImport.textContent = t("import", "导入");
+  els.exportSecretsLabel.textContent = t("export_secrets", "含密钥");
+  els.btnRefreshHistory.textContent = t("history_refresh", "刷新");
+  els.historyHint.textContent = t("history_hint", "最近 30 条配置改动记录");
+  els.bindingsHint.textContent = t(
+    "bindings_hint",
+    "会话绑定优先于全局引擎，改动立即生效。",
+  );
   els.enginesHint.textContent = t(
     "engines_hint",
     "把任意引擎设为默认，它就会接管全部会话。",

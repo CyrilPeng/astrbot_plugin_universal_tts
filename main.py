@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import hashlib
 import inspect
 import json
 import random
@@ -167,7 +168,7 @@ def _read_plugin_version(fallback: str = "0.0.0") -> str:
     "astrbot_plugin_universal_tts",
     "某不科学的高数",
     "通用 TTS 插件，支持多引擎切换，通过钩子拦截实现 TTS",
-    _read_plugin_version("1.3.7"),
+    _read_plugin_version("1.3.8"),
 )
 class UniversalTTSPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -1064,6 +1065,14 @@ class UniversalTTSPlugin(Star):
             (f"{prefix}/samples/delete", self.web_delete_sample, ["POST"], "删除音色样本文件"),
             (f"{prefix}/settings", self.web_get_settings, ["GET"], "读取全局设置"),
             (f"{prefix}/settings/save", self.web_save_settings, ["POST"], "保存全局设置"),
+            (f"{prefix}/engines/reorder", self.web_reorder_engines, ["POST"], "调整引擎顺序"),
+            (f"{prefix}/bindings", self.web_list_bindings, ["GET"], "列出会话绑定"),
+            (f"{prefix}/bindings/set", self.web_set_binding, ["POST"], "设置会话绑定"),
+            (f"{prefix}/bindings/delete", self.web_delete_binding, ["POST"], "解除会话绑定"),
+            (f"{prefix}/bindings/clear", self.web_clear_bindings, ["POST"], "清空会话绑定"),
+            (f"{prefix}/config/export", self.web_export_config, ["GET"], "导出插件配置"),
+            (f"{prefix}/config/import", self.web_import_config, ["POST"], "导入插件配置"),
+            (f"{prefix}/history", self.web_list_history, ["GET"], "查看最近变更"),
         )
         for route, handler, methods, desc in apis:
             try:
@@ -1141,6 +1150,8 @@ class UniversalTTSPlugin(Star):
             "templates": self._engine_templates(),
         }
         payload.update(self._runtime_switches())
+        payload["token"] = self._config_token()
+        payload["status"] = self._status_summary()
         return payload
 
     @staticmethod
@@ -1269,6 +1280,9 @@ class UniversalTTSPlugin(Star):
         payload = await request.json(default={})
         if not isinstance(payload, dict):
             return error_response("请求体必须是 JSON 对象")
+        stale = self._check_config_token(payload)
+        if stale:
+            return error_response(stale)
         raw = payload.get("engine")
         if not isinstance(raw, dict):
             return error_response("缺少 engine 字段")
@@ -1314,10 +1328,17 @@ class UniversalTTSPlugin(Star):
             self.config["active_engine"] = str(engines[0].get("instance_name") or "").strip()
 
         await self._apply_engines(engines)
+        self._append_history(
+            "engines.save",
+            f"{'更新' if existing is not None else '新建'}引擎「{name}」({template_key})",
+        )
         return json_response(self._build_engines_payload())
 
     async def web_clone_engine(self):
         payload = await request.json(default={})
+        stale = self._check_config_token(payload)
+        if stale:
+            return error_response(stale)
         engines = [dict(e) for e in self._list_engines() if isinstance(e, dict)]
         try:
             index = self._as_index(payload.get("index"), len(engines))
@@ -1340,10 +1361,14 @@ class UniversalTTSPlugin(Star):
         source["instance_name"] = candidate
         engines.insert(index + 1, source)
         await self._apply_engines(engines)
+        self._append_history("engines.clone", f"复制引擎「{base}」为「{candidate}」")
         return json_response(self._build_engines_payload())
 
     async def web_delete_engine(self):
         payload = await request.json(default={})
+        stale = self._check_config_token(payload)
+        if stale:
+            return error_response(stale)
         engines = [dict(e) for e in self._list_engines() if isinstance(e, dict)]
         try:
             index = self._as_index(payload.get("index"), len(engines))
@@ -1364,15 +1389,20 @@ class UniversalTTSPlugin(Star):
         if stale:
             self._save_bindings()
         await self._apply_engines(engines)
+        self._append_history("engines.delete", f"删除引擎「{removed_name}」")
         return json_response(self._build_engines_payload())
 
     async def web_activate_engine(self):
         payload = await request.json(default={})
+        stale = self._check_config_token(payload)
+        if stale:
+            return error_response(stale)
         value = str(payload.get("name") or "").strip()
         if value == DISABLED_ENGINE:
             self.config["active_engine"] = DISABLED_ENGINE
             await self._persist_config()
             await self._reload_engine_instances()
+            self._append_history("engines.activate", "关闭全局 TTS")
             return json_response(self._build_engines_payload())
         if not value:
             return error_response("缺少 name")
@@ -1386,6 +1416,7 @@ class UniversalTTSPlugin(Star):
         self.config["active_engine"] = value
         await self._persist_config()
         await self._reload_engine_instances()
+        self._append_history("engines.activate", f"设为默认引擎「{value}」")
         return json_response(self._build_engines_payload())
 
     # ------------------------------------------------------------------
@@ -1626,6 +1657,7 @@ class UniversalTTSPlugin(Star):
         await self._persist_config()
         await self._reload_engine_instances()
         logger.info(f"[UniversalTTS] 已上传音色样本 {candidate}（{written} 字节）")
+        self._append_history("samples.upload", f"上传样本「{candidate}」（{written} 字节）")
         return json_response(
             {
                 "samples": self._sample_entries(),
@@ -1637,6 +1669,9 @@ class UniversalTTSPlugin(Star):
 
     async def web_delete_sample(self):
         payload = await request.json(default={}) or {}
+        stale = self._check_config_token(payload)
+        if stale:
+            return error_response(stale)
         rel = str(payload.get("path") or "").strip()
         if not rel:
             return error_response("缺少 path 参数")
@@ -1669,6 +1704,7 @@ class UniversalTTSPlugin(Star):
             logger.warning(f"[UniversalTTS] 删除样本文件失败 {rel}: {e}")
         await self._reload_engine_instances()
         logger.info(f"[UniversalTTS] 已删除音色样本 {name}")
+        self._append_history("samples.delete", f"删除样本「{name}」")
         return json_response({"samples": self._sample_entries()})
 
     async def web_download_sample(self):
@@ -1698,6 +1734,9 @@ class UniversalTTSPlugin(Star):
     async def web_rename_sample(self):
         """重命名音色样本文件，并同步更新引用它的引擎。"""
         payload = await request.json(default={}) or {}
+        stale = self._check_config_token(payload)
+        if stale:
+            return error_response(stale)
         rel = str(payload.get("path") or "").strip()
         new_name = Path(str(payload.get("new_name") or "").replace("\\", "/")).name.strip()
         if not rel:
@@ -1754,6 +1793,9 @@ class UniversalTTSPlugin(Star):
         await self._reload_engine_instances()
         logger.info(
             f"[UniversalTTS] 样本已重命名: {old_name} -> {new_name}（同步 {renamed} 个引擎）"
+        )
+        self._append_history(
+            "samples.rename", f"样本「{old_name}」→「{new_name}」（同步 {renamed} 个引擎）"
         )
         return json_response(
             {
@@ -1812,7 +1854,7 @@ class UniversalTTSPlugin(Star):
                     "value": value,
                 }
             )
-        return {"fields": fields, "secrets": secrets}
+        return {"fields": fields, "secrets": secrets, "token": self._config_token()}
 
     def _coerce_setting(self, value, field_type: str, default):
         """按 schema 类型归一化设置值；list 类型接受数组或分隔文本。"""
@@ -1838,6 +1880,9 @@ class UniversalTTSPlugin(Star):
     async def web_save_settings(self):
         """保存全局设置；敏感字段留空表示保持原值。"""
         payload = await request.json(default={}) or {}
+        stale = self._check_config_token(payload)
+        if stale:
+            return error_response(stale)
         incoming = payload.get("values")
         if not isinstance(incoming, dict):
             return error_response("缺少 values 参数")
@@ -1864,7 +1909,330 @@ class UniversalTTSPlugin(Star):
         await self._persist_config()
         await self._reload_engine_instances()
         logger.info(f"[UniversalTTS] 已更新全局设置: {', '.join(sorted(updated))}")
+        self._append_history(
+            "settings.save", f"更新设置: {', '.join(sorted(updated))}"
+        )
         return json_response(self._build_settings_payload())
+
+    # ------------------------------------------------------------------
+    # 配置指纹（双入口冲突检测）
+    # ------------------------------------------------------------------
+
+    def _config_token(self) -> str:
+        """当前配置的指纹。
+
+        WebUI 视图和插件配置表单都能改同一份配置。前端把读取时的指纹带回来，
+        保存前比对，就能发现"另一边已经改过了"，避免后保存的静默覆盖前者。
+        """
+        try:
+            payload = json.dumps(
+                self.config, ensure_ascii=False, sort_keys=True, default=str
+            )
+        except Exception:
+            return ""
+        return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
+
+    def _check_config_token(self, payload: dict) -> str | None:
+        """校验前端携带的指纹；返回错误信息，或在无需拦截时返回 None。"""
+        expected = str((payload or {}).get("token") or "").strip()
+        if not expected:
+            # 没有携带指纹（老客户端或非视图调用）不做拦截
+            return None
+        if expected != self._config_token():
+            return "配置已被其他方式修改（例如插件配置表单），请刷新页面后重试"
+        return None
+
+    # ------------------------------------------------------------------
+    # 变更历史
+    # ------------------------------------------------------------------
+
+    HISTORY_MAX_ENTRIES = 200
+    HISTORY_FILE_NAME = "webui_history.jsonl"
+
+    def _append_history(self, action: str, detail: str) -> None:
+        """记录一次改动，供「最近变更」查看。调用方需自行避免写入敏感内容。"""
+        entry = {
+            "ts": time.time(),
+            "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "action": action,
+            "detail": detail,
+        }
+        try:
+            path = self._data_dir / self.HISTORY_FILE_NAME
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            self._trim_history(path)
+        except Exception as e:
+            logger.warning(f"[UniversalTTS] 写入变更历史失败: {e}")
+
+    def _trim_history(self, path: Path) -> None:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return
+        if len(lines) <= self.HISTORY_MAX_ENTRIES:
+            return
+        try:
+            path.write_text(
+                "\n".join(lines[-self.HISTORY_MAX_ENTRIES:]) + "\n", encoding="utf-8"
+            )
+        except OSError:
+            pass
+
+    def _read_history(self, limit: int = 30) -> list[dict]:
+        path = self._data_dir / self.HISTORY_FILE_NAME
+        if not path.is_file():
+            return []
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return []
+        entries: list[dict] = []
+        for line in reversed(lines):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+            if len(entries) >= limit:
+                break
+        return entries
+
+    async def web_list_history(self):
+        raw = str(request.query.get("limit", "30") or "30")
+        try:
+            limit = max(1, min(self.HISTORY_MAX_ENTRIES, int(raw)))
+        except (TypeError, ValueError):
+            limit = 30
+        return json_response({"entries": self._read_history(limit)})
+
+    # ------------------------------------------------------------------
+    # 状态总览
+    # ------------------------------------------------------------------
+
+    def _status_summary(self) -> dict:
+        engines = [e for e in self._list_engines() if isinstance(e, dict)]
+        names = {
+            str(e.get("instance_name") or "").strip()
+            for e in engines
+            if str(e.get("instance_name") or "").strip()
+        }
+        active = str(self.config.get("active_engine") or "").strip()
+        samples = [
+            s for s in (self.config.get("voice_clone_samples") or []) if isinstance(s, str)
+        ]
+        return {
+            "engine_count": len(engines),
+            "binding_count": len(self._session_bindings),
+            "sample_count": len(samples),
+            "active_engine": active,
+            "active_engine_exists": (
+                None
+                if not active or active == DISABLED_ENGINE
+                else active in names
+            ),
+        }
+
+    # ------------------------------------------------------------------
+    # 会话绑定
+    # ------------------------------------------------------------------
+
+    def _binding_entries(self) -> list[dict]:
+        names = {
+            str(e.get("instance_name") or "").strip()
+            for e in self._list_engines()
+            if isinstance(e, dict)
+        }
+        entries: list[dict] = []
+        for session_id in sorted(self._session_bindings):
+            target = str(self._session_bindings.get(session_id) or "").strip()
+            try:
+                display = _format_session_id(session_id)
+            except Exception:
+                display = session_id
+            entries.append(
+                {
+                    "session_id": session_id,
+                    "display": display,
+                    "target": target,
+                    "target_label": self._format_binding_name(target),
+                    # 指向已被删除的引擎即为悬空绑定
+                    "exists": True if target == DISABLED_ENGINE else target in names,
+                }
+            )
+        return entries
+
+    def _bindings_payload(self) -> dict:
+        return {
+            "bindings": self._binding_entries(),
+            "engines": sorted(
+                {
+                    str(e.get("instance_name") or "").strip()
+                    for e in self._list_engines()
+                    if isinstance(e, dict) and str(e.get("instance_name") or "").strip()
+                }
+            ),
+            "disabled_engine": DISABLED_ENGINE,
+            "token": self._config_token(),
+        }
+
+    async def web_list_bindings(self):
+        return json_response(self._bindings_payload())
+
+    async def web_set_binding(self):
+        payload = await request.json(default={}) or {}
+        session_id = str(payload.get("session_id") or "").strip()
+        target = str(payload.get("target") or "").strip()
+        if not session_id:
+            return error_response("缺少 session_id 参数")
+        if not target:
+            self._session_bindings.pop(session_id, None)
+            summary = "恢复为跟随全局引擎"
+        else:
+            if target != DISABLED_ENGINE:
+                names = {
+                    str(e.get("instance_name") or "").strip()
+                    for e in self._list_engines()
+                    if isinstance(e, dict)
+                }
+                if target not in names:
+                    return error_response(f"引擎不存在: {target}")
+            self._session_bindings[session_id] = target
+            summary = f"绑定到 {self._format_binding_name(target)}"
+        self._save_bindings()
+        self._append_history(
+            "bindings.set", f"{_format_session_id(session_id)}：{summary}"
+        )
+        return json_response(self._bindings_payload())
+
+    async def web_delete_binding(self):
+        payload = await request.json(default={}) or {}
+        session_id = str(payload.get("session_id") or "").strip()
+        if not session_id:
+            return error_response("缺少 session_id 参数")
+        if session_id not in self._session_bindings:
+            return error_response(f"绑定不存在: {session_id}")
+        self._session_bindings.pop(session_id, None)
+        self._save_bindings()
+        self._append_history(
+            "bindings.delete", f"解除 {_format_session_id(session_id)} 的绑定"
+        )
+        return json_response(self._bindings_payload())
+
+    async def web_clear_bindings(self):
+        count = len(self._session_bindings)
+        if not count:
+            return error_response("当前没有会话绑定")
+        self._session_bindings.clear()
+        self._save_bindings()
+        self._append_history("bindings.clear", f"清空 {count} 条会话绑定")
+        return json_response(self._bindings_payload())
+
+    # ------------------------------------------------------------------
+    # 引擎排序
+    # ------------------------------------------------------------------
+
+    async def web_reorder_engines(self):
+        payload = await request.json(default={}) or {}
+        stale = self._check_config_token(payload)
+        if stale:
+            return error_response(stale)
+        order = payload.get("order")
+        engines = self._list_engines()
+        if not isinstance(order, list) or len(order) != len(engines):
+            return error_response("排序参数与引擎数量不一致，请刷新后重试")
+        try:
+            indices = [self._as_index(value, len(engines)) for value in order]
+        except ValueError as e:
+            return error_response(str(e))
+        if len(set(indices)) != len(indices):
+            return error_response("排序参数存在重复项")
+        reordered = [engines[i] for i in indices]
+        await self._apply_engines(reordered)
+        self._append_history("engines.reorder", f"调整 {len(reordered)} 个引擎的顺序")
+        return json_response(self._build_engines_payload())
+
+    # ------------------------------------------------------------------
+    # 配置导入 / 导出
+    # ------------------------------------------------------------------
+
+    async def web_export_config(self):
+        """导出插件配置。默认脱敏，显式要求时才带密钥。"""
+        raw = str(request.query.get("include_secrets", "") or "").strip().lower()
+        include_secrets = raw in ("1", "true", "yes", "on")
+        data = json.loads(json.dumps(self.config, ensure_ascii=False, default=str))
+        if not include_secrets:
+            for item in data.get("engines") or []:
+                if not isinstance(item, dict):
+                    continue
+                for key in list(item):
+                    if self._is_sensitive_field(key):
+                        item[key] = ""
+        self._append_history(
+            "config.export", "导出配置（含密钥）" if include_secrets else "导出配置（已脱敏）"
+        )
+        return json_response(
+            {
+                "config": data,
+                "plugin_version": _read_plugin_version("unknown"),
+                "exported_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "include_secrets": include_secrets,
+            }
+        )
+
+    async def web_import_config(self):
+        """导入配置：逐字段按 schema 校验类型，任一字段不合法则整体拒绝。"""
+        payload = await request.json(default={}) or {}
+        incoming = payload.get("config")
+        if not isinstance(incoming, dict):
+            return error_response("缺少 config 参数")
+
+        applied: dict = {}
+        for key, spec in self._read_schema().items():
+            if not isinstance(spec, dict) or key not in incoming:
+                continue
+            field_type = str(spec.get("type") or "string")
+            label = str(spec.get("description") or key)
+            value = incoming.get(key)
+            try:
+                if field_type == "template_list":
+                    if not isinstance(value, list):
+                        raise ValueError("应为引擎列表")
+                    engines: list[dict] = []
+                    for idx, item in enumerate(value):
+                        if not isinstance(item, dict):
+                            raise ValueError(f"第 {idx + 1} 项不是对象")
+                        template_key = str(item.get("__template_key") or "").strip()
+                        if not template_key:
+                            raise ValueError(f"第 {idx + 1} 项缺少 __template_key")
+                        engines.append(self._normalize_engine(template_key, item, None))
+                    applied[key] = engines
+                elif field_type == "file":
+                    if not isinstance(value, list):
+                        raise ValueError("应为文件列表")
+                    applied[key] = [str(v) for v in value if str(v).strip()]
+                else:
+                    applied[key] = self._coerce_setting(
+                        value, field_type, spec.get("default")
+                    )
+            except ValueError as e:
+                return error_response(f"{label}: {e}")
+
+        if not applied:
+            return error_response("没有可导入的字段")
+
+        for key, value in applied.items():
+            self.config[key] = value
+        await self._persist_config()
+        await self._reload_engine_instances()
+        self._append_history("config.import", f"导入 {len(applied)} 项配置")
+        logger.info(f"[UniversalTTS] 已导入配置: {', '.join(sorted(applied))}")
+        result = self._build_settings_payload()
+        result["imported"] = sorted(applied)
+        return json_response(result)
 
     async def terminate(self):
         """插件卸载时释放引擎资源"""
