@@ -1,5 +1,22 @@
 # 更新日志
 
+## v1.3.10
+
+工程化：测试与持续集成随仓库分发。
+
+### 新增
+
+- **`tests/test_webui.py`**：226 项后端用例入库（此前仅存在于开发机临时目录，任何人 clone 后即可复验全部防回归约束）
+- **`tests/test_frontend.py`**：前端静态一致性检查入库（els 引用 / DOM id / i18n 键 / 标签成对 / 禁用模态 API）
+- **GitHub Actions**（`.github/workflows/ci.yml`）：push 与 PR 自动运行语法检查（`compileall` + `node --check`）、后端用例与前端检查，Python 3.10 / 3.12 矩阵
+- README 增加 CI 徽章与「开发与测试」章节
+- 测试进程退出时自动清理临时工作目录（`atexit`）
+
+### 说明
+
+- 除版本号兜底字符串外无运行时代码改动，容器行为与 1.3.9 完全一致
+- 测试仅依赖 `pyyaml`，在最小 stub 环境下加载真实插件代码，不依赖 AstrBot 运行时
+
 ## v1.3.9
 
 把帮助搬进 WebUI：用户不必再去插件页翻文档。

@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    name: 测试（Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: 安装测试依赖
+        run: python -m pip install --disable-pip-version-check pyyaml
+
+      - name: 语法检查
+        run: |
+          python -m compileall -q main.py engines
+          node --check views/engines/app.js
+
+      - name: 后端用例
+        run: python tests/test_webui.py
+
+      - name: 前端一致性检查
+        run: python tests/test_frontend.py

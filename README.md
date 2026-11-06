@@ -8,7 +8,8 @@
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-blue?style=flat-square)](https://github.com/AstrBotDevs/AstrBot)
 [![License](https://img.shields.io/badge/License-AGPL--3.0-green?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.3.9-orange?style=flat-square)]()
+[![Version](https://img.shields.io/badge/Version-1.3.10-orange?style=flat-square)]()
+[![CI](https://github.com/CyrilPeng/astrbot_plugin_universal_tts/actions/workflows/ci.yml/badge.svg)](https://github.com/CyrilPeng/astrbot_plugin_universal_tts/actions/workflows/ci.yml)
 
 一个为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 打造的通用语音合成插件。
 支持多种引擎，覆盖国内外主流 TTS 服务，还能自定义接入任意 HTTP API。
@@ -176,6 +177,20 @@ engines/
 1. 新建 `engines/your_provider/`，实现 `synthesize(text) -> (bytes, format)`
 2. 在 `engines/__init__.py` 中导入并注册
 3. 在 `_conf_schema.json` 中添加配置模板
+
+---
+
+## 🧪 开发与测试
+
+仓库自带 226 项后端用例与前端静态一致性检查，push / PR 时由 GitHub Actions 自动运行（Python 3.10 / 3.12 矩阵）：
+
+```bash
+pip install pyyaml
+python tests/test_webui.py      # 后端：Web API、引擎管理、绑定、导入导出、指令规格一致性
+python tests/test_frontend.py   # 前端：els 引用 / DOM id / i18n 键 / 标签成对 / 禁用模态 API
+```
+
+测试在最小 stub 环境下加载真实插件代码，不依赖 AstrBot 运行时；新增指令、Web 路由或平台声明时若未同步登记，对应用例会直接失败。
 
 ---
 
