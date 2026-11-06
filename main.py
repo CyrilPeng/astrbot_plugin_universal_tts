@@ -303,7 +303,7 @@ def _read_plugin_version(fallback: str = "0.0.0") -> str:
     "astrbot_plugin_universal_tts",
     "某不科学的高数",
     "通用 TTS 插件，支持多引擎切换，通过钩子拦截实现 TTS",
-    _read_plugin_version("1.3.10"),
+    _read_plugin_version("1.4.0"),
 )
 class UniversalTTSPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -315,6 +315,8 @@ class UniversalTTSPlugin(Star):
         self._runtime_enabled = True
         self._last_tts_text: dict[str, str] = {}  # session_id -> 最近一次 TTS 文本
         self._tts_audio_text: dict[str, str] = {}  # audio_path -> TTS 文本（用于引用还原）
+        self._engine_stats: dict[str, dict] = {}  # instance_name -> 合成统计（内存态，重启清零）
+        self._warned_skip_patterns: set[str] = set()  # 已告警过的无效跳过正则
         self._last_temp_cleanup_at = 0.0
         self._temp_dir = Path("data") / "temp" / "universal_tts"
         self._temp_dir.mkdir(parents=True, exist_ok=True)
@@ -654,6 +656,12 @@ class UniversalTTSPlugin(Star):
                 )
                 return
 
+        # 智能跳过：代码块、纯链接、自定义正则
+        skip_reason = self._should_skip_tts(full_text)
+        if skip_reason:
+            logger.debug(f"[UniversalTTS] 命中跳过规则 ({skip_reason})，跳过 TTS")
+            return
+
         # 获取当前会话应使用的引擎
         session_id = _get_session_id(event)
         engine = self._get_engine_for_session(session_id)
@@ -663,7 +671,7 @@ class UniversalTTSPlugin(Star):
         # 合成语音
         try:
             logger.debug(f"[UniversalTTS] 开始合成 (引擎: {engine.instance_name}): {full_text[:50]}...")
-            audio_bytes, fmt = await engine.synthesize(full_text)
+            audio_bytes, fmt = await self._synthesize_with_stats(engine, full_text)
         except Exception as e:
             logger.error(
                 f"[UniversalTTS] TTS 合成失败 (引擎: {engine.instance_name}): "
@@ -795,6 +803,88 @@ class UniversalTTSPlugin(Star):
         if self.config.get("active_engine", "").strip() == DISABLED_ENGINE:
             return "关闭"
         return self._engine.instance_name if self._engine else "(未初始化)"
+
+    # ------------------------------------------------------------------
+    # 合成统计与智能跳过
+    # ------------------------------------------------------------------
+
+    def _engine_stats_bucket(self, name: str) -> dict:
+        return self._engine_stats.setdefault(
+            name,
+            {
+                "success": 0,
+                "fail": 0,
+                "total_ms": 0,
+                "max_ms": 0,
+                "last_error": "",
+                "last_error_at": 0.0,
+                "last_success_at": 0.0,
+            },
+        )
+
+    async def _synthesize_with_stats(self, engine, text: str):
+        """带统计的合成封装：成功/失败/耗时统一记录，异常原样抛出。"""
+        name = getattr(engine, "instance_name", "") or "(未知)"
+        bucket = self._engine_stats_bucket(name)
+        start = time.monotonic()
+        try:
+            audio, audio_format = await engine.synthesize(text)
+        except Exception as e:
+            bucket["fail"] += 1
+            bucket["last_error"] = f"{type(e).__name__}: {e}"[:200]
+            bucket["last_error_at"] = time.time()
+            raise
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        bucket["success"] += 1
+        bucket["total_ms"] += elapsed_ms
+        bucket["max_ms"] = max(bucket["max_ms"], elapsed_ms)
+        bucket["last_success_at"] = time.time()
+        return audio, audio_format
+
+    def _engine_stats_summary(self, name: str) -> dict | None:
+        bucket = self._engine_stats.get(name)
+        if not bucket or (bucket["success"] == 0 and bucket["fail"] == 0):
+            return None
+        success = bucket["success"]
+        return {
+            "success": success,
+            "fail": bucket["fail"],
+            "avg_ms": int(bucket["total_ms"] / success) if success else None,
+            "max_ms": bucket["max_ms"],
+            "last_error": bucket["last_error"],
+            "last_error_at": bucket["last_error_at"],
+            "last_success_at": bucket["last_success_at"],
+        }
+
+    def _should_skip_tts(self, text: str) -> str:
+        """判断文本是否不适合朗读，返回跳过原因（空串表示不跳过）。"""
+        if self.config.get("tts_skip_code_blocks", True) and "```" in text:
+            return "code_block"
+
+        # 整条消息基本只有链接：朗读一串 URL 没有意义。
+        urls = re.findall(r"https?://\S+", text)
+        if urls:
+            residue = text
+            for url in urls:
+                residue = residue.replace(url, "")
+            if len(residue.strip()) < 10 and min(len(u) for u in urls) > 40:
+                return "url_only"
+
+        patterns = self.config.get("tts_skip_patterns") or []
+        if not isinstance(patterns, (list, tuple)):
+            return ""
+        for raw in patterns:
+            pattern = str(raw).strip()
+            if not pattern:
+                continue
+            try:
+                if re.search(pattern, text):
+                    return f"pattern:{pattern}"
+            except re.error as e:
+                if pattern not in self._warned_skip_patterns:
+                    self._warned_skip_patterns.add(pattern)
+                    logger.warning(f"[UniversalTTS] 跳过规则不是有效正则，已忽略: {pattern} ({e})")
+        return ""
 
     def _session_tts_status(self, session_id: str) -> str:
         binding = self._session_bindings.get(session_id)
@@ -987,7 +1077,7 @@ class UniversalTTSPlugin(Star):
             return
 
         try:
-            audio_bytes, fmt = await engine.synthesize(text)
+            audio_bytes, fmt = await self._synthesize_with_stats(engine, text)
             audio_path = self._temp_dir / f"tts_test_{uuid.uuid4().hex}.{fmt}"
             await asyncio.to_thread(audio_path.write_bytes, audio_bytes)
             self._cleanup_temp_files()
@@ -1285,6 +1375,7 @@ class UniversalTTSPlugin(Star):
             for key in secrets:
                 item[key] = ""
             item["_secrets"] = secrets
+            item["stats"] = self._engine_stats_summary(str(item.get("instance_name") or ""))
             engines.append(item)
         payload = {
             "engines": engines,
@@ -2367,7 +2458,7 @@ class UniversalTTSPlugin(Star):
     # ------------------------------------------------------------------
 
     async def web_export_config(self):
-        """导出插件配置。默认脱敏，显式要求时才带密钥。"""
+        """导出插件配置与会话绑定。默认脱敏，显式要求时才带密钥。"""
         raw = str(request.query.get("include_secrets", "") or "").strip().lower()
         include_secrets = raw in ("1", "true", "yes", "on")
         data = json.loads(json.dumps(self.config, ensure_ascii=False, default=str))
@@ -2378,9 +2469,17 @@ class UniversalTTSPlugin(Star):
                 for key in list(item):
                     if self._is_sensitive_field(key):
                         item[key] = ""
-        self._append_history(
-            "config.export", "导出配置（含密钥）" if include_secrets else "导出配置（已脱敏）"
+        # 会话绑定不是配置 schema 字段，单独快照进导出文件，迁移时不丢绑定。
+        data["session_bindings"] = [
+            {"session_id": sid, "engine": name}
+            for sid, name in self._session_bindings.items()
+        ]
+        detail = (
+            f"导出配置（含密钥）+ {len(self._session_bindings)} 条绑定"
+            if include_secrets
+            else f"导出配置（已脱敏）+ {len(self._session_bindings)} 条绑定"
         )
+        self._append_history("config.export", detail)
         return json_response(
             {
                 "config": data,
@@ -2396,6 +2495,9 @@ class UniversalTTSPlugin(Star):
         incoming = payload.get("config")
         if not isinstance(incoming, dict):
             return error_response("缺少 config 参数")
+
+        # 会话绑定不属于配置 schema，先取出单独处理。
+        incoming_bindings = incoming.pop("session_bindings", None)
 
         applied: dict = {}
         for key, spec in self._read_schema().items():
@@ -2431,14 +2533,43 @@ class UniversalTTSPlugin(Star):
         if not applied:
             return error_response("没有可导入的字段")
 
+        # 绑定导入：整体替换，引擎名必须在（导入后的）引擎列表或禁音值中。
+        imported_bindings = 0
+        if incoming_bindings is not None:
+            if not isinstance(incoming_bindings, list):
+                return error_response("session_bindings 应为列表")
+            valid_names = {
+                str(item.get("instance_name") or "").strip()
+                for item in (applied.get("engines") or self._list_engines())
+                if isinstance(item, dict)
+            } - {""}
+            new_bindings: dict[str, str] = {}
+            for idx, entry in enumerate(incoming_bindings, 1):
+                if not isinstance(entry, dict):
+                    return error_response(f"会话绑定第 {idx} 项不是对象")
+                sid = str(entry.get("session_id") or "").strip()
+                name = str(entry.get("engine") or "").strip()
+                if not sid or not name:
+                    return error_response(f"会话绑定第 {idx} 项缺少 session_id 或 engine")
+                if name != DISABLED_ENGINE and name not in valid_names:
+                    return error_response(f"会话绑定第 {idx} 项引用了不存在的引擎: {name}")
+                new_bindings[sid] = name
+            self._session_bindings = new_bindings
+            self._save_bindings()
+            imported_bindings = len(new_bindings)
+
         for key, value in applied.items():
             self.config[key] = value
         await self._persist_config()
         await self._reload_engine_instances()
-        self._append_history("config.import", f"导入 {len(applied)} 项配置")
+        detail = f"导入 {len(applied)} 项配置"
+        if incoming_bindings is not None:
+            detail += f"，替换 {imported_bindings} 条会话绑定"
+        self._append_history("config.import", detail)
         logger.info(f"[UniversalTTS] 已导入配置: {', '.join(sorted(applied))}")
         result = self._build_settings_payload()
         result["imported"] = sorted(applied)
+        result["imported_bindings"] = imported_bindings
         return json_response(result)
 
     async def terminate(self):

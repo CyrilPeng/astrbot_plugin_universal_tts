@@ -659,7 +659,8 @@ def main():
     check("读取成功", res.get("__ok__") is True, str(res)[:160])
     payload = res.get("data") or {}
     fields = {f["key"]: f for f in payload.get("fields", [])}
-    check("返回 9 个字段", len(fields) == 9, str(sorted(fields)))
+    check("返回 11 个字段", len(fields) == 11, str(sorted(fields)))
+    check("含智能跳过字段", "tts_skip_code_blocks" in fields and "tts_skip_patterns" in fields)
     check("不含 engines", "engines" not in fields)
     check("不含 active_engine", "active_engine" not in fields)
     check("不含 voice_clone_samples", "voice_clone_samples" not in fields)
@@ -970,6 +971,155 @@ def main():
         "TTS Provider" not in str(meta.get("desc") or ""),
         str(meta.get("desc"))[:120],
     )
+
+    print("\n[33] 合成统计")
+
+    class _StatsEngine:
+        """独立 stub 引擎：不依赖前面用例遗留的全局引擎状态。"""
+
+        instance_name = "紫苏九月"
+
+        async def synthesize(self, text):
+            if STUB["fail"]:
+                raise RuntimeError(STUB["fail"])
+            return STUB["audio"], STUB["format"]
+
+    stats_engine = _StatsEngine()
+    inst._engine_stats.clear()
+    summary = inst._engine_stats_summary(stats_engine.instance_name)
+    check("无数据时返回 None", summary is None)
+    audio, fmt = asyncio.run(inst._synthesize_with_stats(stats_engine, "统计-成功"))
+    check("成功路径返回合成结果", audio == STUB["audio"] and fmt == STUB["format"])
+    summary = inst._engine_stats_summary(stats_engine.instance_name)
+    check("成功计数为 1", summary and summary["success"] == 1, str(summary))
+    check("平均耗时字段存在", summary and summary["avg_ms"] is not None, str(summary))
+    check("最近成功时间已记录", summary and summary["last_success_at"] > 0)
+
+    STUB["fail"] = "provider rejected key"
+    raised = False
+    try:
+        asyncio.run(inst._synthesize_with_stats(stats_engine, "统计-失败"))
+    except RuntimeError:
+        raised = True
+    check("异常原样抛出", raised)
+    STUB["fail"] = None
+    summary = inst._engine_stats_summary(stats_engine.instance_name)
+    check("失败计数为 1", summary and summary["fail"] == 1, str(summary))
+    check("最近错误已记录", summary and "provider rejected key" in summary["last_error"], str(summary))
+    check("成功计数不受失败影响", summary and summary["success"] == 1)
+
+    payload = inst._build_engines_payload()
+    named_item = next(
+        (e for e in payload["engines"] if e.get("instance_name") == stats_engine.instance_name),
+        None,
+    )
+    check("引擎 payload 带 stats", named_item is not None and named_item.get("stats") is not None,
+          str((named_item or {}).get("stats")))
+    if named_item:
+        check("payload 统计数字一致",
+              named_item["stats"]["success"] == 1 and named_item["stats"]["fail"] == 1,
+              str(named_item["stats"]))
+    other_items = [e for e in payload["engines"] if e.get("instance_name") != stats_engine.instance_name]
+    check("无数据引擎 stats 为 None", all(e.get("stats") is None for e in other_items),
+          str([e.get("stats") for e in other_items]))
+
+    print("\n[34] 智能跳过")
+    inst.config["tts_skip_code_blocks"] = True
+    inst.config["tts_skip_patterns"] = []
+    check("代码块被跳过", inst._should_skip_tts("看这段代码\n```py\nprint(1)\n```") == "code_block")
+    check("普通文本不跳过", inst._should_skip_tts("你好，今天天气不错。") == "")
+    check("普通链接不跳过",
+          inst._should_skip_tts("参考 https://example.com/a 这个文档写得很详细") == "")
+    check("纯长链接被跳过",
+          inst._should_skip_tts("https://example.com/very/long/path/segment/xyz123?query=abcdefg")
+          == "url_only")
+    check("短链接+正文不跳过",
+          inst._should_skip_tts("看 https://a.bc 这条新闻，讲得很有道理") == "")
+    inst.config["tts_skip_patterns"] = [r"^\d{4,8}$"]
+    check("自定义正则命中", inst._should_skip_tts("123456") == r"pattern:^\d{4,8}$",
+          inst._should_skip_tts("123456"))
+    check("自定义正则不误伤", inst._should_skip_tts("订单号 123456 已发货") == "")
+    inst.config["tts_skip_patterns"] = ["([无效正则"]
+    check("无效正则被忽略", inst._should_skip_tts("普通文本") == "")
+    check("无效正则有告警", "([无效正则" in inst._warned_skip_patterns)
+    inst.config["tts_skip_code_blocks"] = False
+    check("关闭后代码块不跳过", inst._should_skip_tts("```py\nx\n```") == "")
+    inst.config["tts_skip_code_blocks"] = True
+    inst.config["tts_skip_patterns"] = []
+    schema = inst._read_schema()
+    check("schema 含 tts_skip_code_blocks", "tts_skip_code_blocks" in schema)
+    check("schema 含 tts_skip_patterns", "tts_skip_patterns" in schema)
+    check("schema 默认值正确",
+          schema["tts_skip_code_blocks"].get("default") is True
+          and schema["tts_skip_patterns"].get("default") == [])
+
+    print("\n[35] 绑定导出导入")
+    DISABLED = module.DISABLED_ENGINE
+    inst._session_bindings = {
+        "aiocqhttp:GroupMessage:111": "紫苏九月",
+        "webchat:FriendMessage:222": DISABLED,
+    }
+    web.request.query = {}
+    res = asyncio.run(inst.web_export_config())
+    exported_bindings = ((res.get("data") or {}).get("config") or {}).get("session_bindings")
+    check("导出含会话绑定", isinstance(exported_bindings, list) and len(exported_bindings) == 2,
+          str(exported_bindings))
+    check("绑定含 session_id 与 engine",
+          all({"session_id", "engine"} <= set(item) for item in exported_bindings or []),
+          str(exported_bindings))
+
+    good_payload = {
+        "config": {
+            "engines": json.loads(json.dumps(SAMPLE_ENGINES)),
+            "session_bindings": [
+                {"session_id": "s1", "engine": "备用"},
+                {"session_id": "s2", "engine": DISABLED},
+            ],
+        }
+    }
+    web.request.payload = good_payload
+    res = asyncio.run(inst.web_import_config())
+    check("绑定导入成功", res.get("__ok__") is True, str(res)[:160])
+    check("返回替换数量", (res.get("data") or {}).get("imported_bindings") == 2)
+    check("绑定已整体替换", inst._session_bindings == {"s1": "备用", "s2": DISABLED},
+          str(inst._session_bindings))
+
+    bad_payload = {
+        "config": {
+            "engines": json.loads(json.dumps(SAMPLE_ENGINES)),
+            "session_bindings": [{"session_id": "s1", "engine": "不存在的引擎"}],
+        }
+    }
+    web.request.payload = bad_payload
+    res = asyncio.run(inst.web_import_config())
+    check("引用不存在引擎被拒绝", res.get("__ok__") is False, str(res)[:160])
+    check("拒绝时绑定未被改动", inst._session_bindings == {"s1": "备用", "s2": DISABLED})
+
+    bad_shape = {
+        "config": {
+            "engines": json.loads(json.dumps(SAMPLE_ENGINES)),
+            "session_bindings": [{"engine": "备用"}],
+        }
+    }
+    web.request.payload = bad_shape
+    res = asyncio.run(inst.web_import_config())
+    check("缺 session_id 被拒绝", res.get("__ok__") is False, str(res)[:160])
+
+    not_list = {
+        "config": {
+            "engines": json.loads(json.dumps(SAMPLE_ENGINES)),
+            "session_bindings": "nope",
+        }
+    }
+    web.request.payload = not_list
+    res = asyncio.run(inst.web_import_config())
+    check("非列表绑定被拒绝", res.get("__ok__") is False, str(res)[:160])
+
+    web.request.payload = {"config": {"engines": json.loads(json.dumps(SAMPLE_ENGINES))}}
+    res = asyncio.run(inst.web_import_config())
+    check("不含绑定字段时不改动绑定", res.get("__ok__") is True
+          and (res.get("data") or {}).get("imported_bindings") == 0, str(res)[:160])
+    check("旧版导出文件兼容", inst._session_bindings == {"s1": "备用", "s2": DISABLED})
 
     print()
     if failures:

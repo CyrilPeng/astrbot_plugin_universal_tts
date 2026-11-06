@@ -434,6 +434,24 @@ function renderRow(engine, index) {
   meta.textContent = bits.join(" · ");
   main.appendChild(meta);
 
+  const stats = engine.stats;
+  if (stats && (stats.success > 0 || stats.fail > 0)) {
+    const statLine = document.createElement("div");
+    statLine.className = "row-stats";
+    const parts = [`${t("stats_success", "成功")} ${stats.success}`];
+    if (stats.fail > 0) parts.push(`${t("stats_fail", "失败")} ${stats.fail}`);
+    if (stats.avg_ms != null) parts.push(`${t("stats_avg", "平均")} ${stats.avg_ms}ms`);
+    statLine.textContent = parts.join(" · ");
+    main.appendChild(statLine);
+    if (stats.fail > 0 && stats.last_error) {
+      const errLine = document.createElement("div");
+      errLine.className = "row-stats-error";
+      errLine.textContent = `${t("stats_last_error", "最近错误")}：${stats.last_error}`;
+      errLine.title = stats.last_error;
+      main.appendChild(errLine);
+    }
+  }
+
   row.appendChild(main);
 
   const actions = document.createElement("div");
@@ -1204,13 +1222,19 @@ async function importConfig(file) {
     setBanner(t("import_bad_format", "文件格式不正确，需为插件配置对象"), "error");
     return;
   }
-  const count = Object.keys(config).length;
-  const ok = await askConfirm(
-    t("import_confirm", "将导入 {count} 个配置项，现有同名配置会被覆盖。确定继续？", {
-      count,
-    }),
-    t("import_action", "导入"),
+  const bindings = Array.isArray(config.session_bindings)
+    ? config.session_bindings.length
+    : null;
+  const count = Object.keys(config).filter((key) => key !== "session_bindings").length;
+  let confirmMsg = t(
+    "import_confirm",
+    "将导入 {count} 个配置项，现有同名配置会被覆盖。确定继续？",
+    { count },
   );
+  if (bindings !== null) {
+    confirmMsg += `\n${t("import_bindings_hint", "文件包含 {count} 条会话绑定，导入后将替换现有全部绑定。", { count: bindings })}`;
+  }
+  const ok = await askConfirm(confirmMsg, t("import_action", "导入"));
   if (!ok) return;
   try {
     const data = await bridge.apiPost("config/import", { config });
@@ -1218,7 +1242,13 @@ async function importConfig(file) {
     if (data.token) state.token = String(data.token);
     renderSettings();
     const applied = Array.isArray(data.imported) ? data.imported.length : 0;
-    setBanner(t("import_ok", "已导入 {count} 项配置", { count: applied }), "ok");
+    let okMsg = t("import_ok", "已导入 {count} 项配置", { count: applied });
+    if (data.imported_bindings != null) {
+      okMsg += t("import_bindings_ok", "，已替换 {count} 条会话绑定", {
+        count: data.imported_bindings,
+      });
+    }
+    setBanner(okMsg, "ok");
     await loadEngines();
     await loadHistory();
   } catch (error) {

@@ -24,6 +24,18 @@
     "default": 50,
     "hint": "超过此字数的回复将不转为语音（仅在启用字数上限时生效）。默认 50 个字符。"
   },
+  "tts_skip_code_blocks": {
+    "description": "跳过包含代码块的回复",
+    "type": "bool",
+    "default": true,
+    "hint": "回复中包含 ``` 围栏代码块时不转为语音（朗读代码没有意义），原文以文本形式发送。"
+  },
+  "tts_skip_patterns": {
+    "description": "自定义跳过规则（正则）",
+    "type": "list",
+    "default": [],
+    "hint": "每行一个正则表达式，回复命中任意一条则不转为语音。例如匹配纯数字验证码：^\\d{4,8}$。无效正则会被忽略并在日志中告警。"
+  },
   "fallback_to_text_on_send_error": {
     "description": "语音发送失败时回退为文本",
     "type": "bool",

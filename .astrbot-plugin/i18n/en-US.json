@@ -105,6 +105,12 @@
       "cmd_example_hint": "Click to copy",
       "copied": "Copied",
       "copy_failed": "Copy failed",
+      "stats_success": "OK",
+      "stats_fail": "Failed",
+      "stats_avg": "Avg",
+      "stats_last_error": "Last error",
+      "import_bindings_hint": "The file contains {count} session bindings; importing replaces all existing bindings.",
+      "import_bindings_ok": ", replaced {count} session bindings",
       "tab_help": "Commands & help",
       "switch_on": "On",
       "switch_off": "Off",
@@ -126,7 +132,7 @@
       "help_permissions_title": "Permissions",
       "help_permissions": "· Admin commands are restricted by default\n· Turning off admin_only_commands lets everyone run them\n· User IDs listed in admin_user_ids are always allowed\n· Some platforms also grant access to group or AstrBot admins\n· Every command must start with / — without it nothing happens",
       "help_faq_title": "Troubleshooting",
-      "help_faq": "No audio: check that “Plugin switch”, “AstrBot global TTS” and “Auto synthesis” at the top are all on\nLong replies are skipped: the length limit is enabled, adjust it with /tts_limit_set\nOnly one group is silent: it may be muted with /tts_bind 0 — send /tts_status there\nChanges not applied: WebUI edits apply instantly; if the plugin config form was just edited, the page asks you to refresh"
+      "help_faq": "No audio: check that “Plugin switch”, “AstrBot global TTS” and “Auto synthesis” at the top are all on\nLong replies are skipped: the length limit is enabled, adjust it with /tts_limit_set\nNo voice for code blocks or link-only replies: that's the built-in smart-skip rule, configurable on the “Settings” tab\nOnly one group is silent: it may be muted with /tts_bind 0 — send /tts_status there\nChanges not applied: WebUI edits apply instantly; if the plugin config form was just edited, the page asks you to refresh"
     }
   }
 }

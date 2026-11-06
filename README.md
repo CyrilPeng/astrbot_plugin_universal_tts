@@ -8,7 +8,7 @@
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-blue?style=flat-square)](https://github.com/AstrBotDevs/AstrBot)
 [![License](https://img.shields.io/badge/License-AGPL--3.0-green?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.3.10-orange?style=flat-square)]()
+[![Version](https://img.shields.io/badge/Version-1.4.0-orange?style=flat-square)]()
 [![CI](https://github.com/CyrilPeng/astrbot_plugin_universal_tts/actions/workflows/ci.yml/badge.svg)](https://github.com/CyrilPeng/astrbot_plugin_universal_tts/actions/workflows/ci.yml)
 
 一个为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 打造的通用语音合成插件。
@@ -25,7 +25,8 @@
 - 🔄 **热切换** — 运行时可一条指令切换引擎，无需手动进入后台重启
 - 🌍 **多引擎覆盖** — MiMo · OpenAI · 火山引擎 · 阿里云 · Azure · ElevenLabs
 - 🛠️ **万能适配** — 自定义 HTTP 引擎，模板化接入任何 TTS API
-- 🎨 **WebUI 完整管理页** — 插件详情页内置五标签视图（含指令与帮助）：引擎增删改查/排序/试听、音色样本上传下载重命名、会话绑定管理、全局设置与变更历史，另支持配置导入导出，保存即生效
+- 🎨 **WebUI 完整管理页** — 插件详情页内置五标签视图（含指令与帮助）：引擎增删改查/排序/试听、音色样本上传下载重命名、会话绑定管理、全局设置与变更历史，另支持配置与会话绑定的导出导入，保存即生效
+- 🧠 **智能跳过与引擎健康统计** — 代码块、纯链接、自定义正则命中的回复不朗读；每个引擎实时记录成功/失败/耗时与最近错误
 
 ---
 
