@@ -16,6 +16,8 @@ const state = {
   settings: null,
   bindings: [],
   bindingEngines: [],
+  activity: [],
+  activeEngine: "",
   history: [],
   helpCommands: [],
   helpSnapshot: null,
@@ -994,7 +996,9 @@ async function loadBindings() {
   try {
     const data = await bridge.apiGet("bindings");
     state.bindings = Array.isArray(data.bindings) ? data.bindings : [];
+    state.activity = Array.isArray(data.activity) ? data.activity : [];
     state.bindingEngines = Array.isArray(data.engines) ? data.engines : [];
+    if (typeof data.active_engine === "string") state.activeEngine = data.active_engine;
     if (data.token) state.token = String(data.token);
     renderBindings();
   } catch (error) {
@@ -1005,16 +1009,102 @@ async function loadBindings() {
 function renderBindings() {
   const list = els.bindingsList;
   list.innerHTML = "";
-  if (!state.bindings.length) {
+  const hasBindings = state.bindings.length > 0;
+  if (hasBindings) {
+    els.bindingsEmpty.hidden = true;
+    const head = document.createElement("h4");
+    head.className = "bindings-group-title";
+    head.textContent = t("bindings_group_explicit", "显式绑定");
+    list.appendChild(head);
+    state.bindings.forEach((binding) => list.appendChild(renderBindingRow(binding)));
+  } else {
     els.bindingsEmpty.hidden = false;
     els.bindingsEmpty.textContent = t(
       "bindings_empty",
       "当前没有会话绑定，所有会话都跟随全局引擎。",
     );
-    return;
   }
-  els.bindingsEmpty.hidden = true;
-  state.bindings.forEach((binding) => list.appendChild(renderBindingRow(binding)));
+  renderActivity(list, hasBindings);
+}
+
+function formatActivityTime(ts) {
+  if (!ts) return "";
+  const date = new Date(Number(ts) * 1000);
+  if (Number.isNaN(date.getTime())) return "";
+  const now = new Date();
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (sameDay) return time;
+  const day = `${date.getMonth() + 1}/${date.getDate()}`;
+  return `${day} ${time}`;
+}
+
+function renderActivity(list, hasBindings) {
+  const items = state.activity || [];
+  if (!items.length) return;
+  // 显式绑定分组与活跃分组之间需要视觉分隔。
+  if (hasBindings) {
+    const divider = document.createElement("div");
+    divider.className = "bindings-divider";
+    list.appendChild(divider);
+  }
+  const head = document.createElement("h4");
+  head.className = "bindings-group-title";
+  head.textContent = t("bindings_group_activity", "近期活跃（跟随全局）");
+  list.appendChild(head);
+  const hint = document.createElement("p");
+  hint.className = "muted";
+  hint.textContent = t(
+    "activity_hint",
+    "这些会话正在使用全局引擎出语音，只是没有显式绑定；点「绑定」可将其固定为当前引擎。",
+  );
+  list.appendChild(hint);
+  items.forEach((item) => list.appendChild(renderActivityRow(item)));
+}
+
+function renderActivityRow(item) {
+  const row = document.createElement("div");
+  row.className = "row";
+  row.setAttribute("role", "listitem");
+
+  const main = document.createElement("div");
+  main.className = "row-main";
+
+  const name = document.createElement("div");
+  name.className = "row-name";
+  const nameText = document.createElement("span");
+  nameText.className = "row-name-text";
+  nameText.textContent = item.display || item.session_id;
+  name.appendChild(nameText);
+  const badge = document.createElement("span");
+  badge.className = "badge";
+  badge.textContent = t("activity_badge", "跟随全局");
+  name.appendChild(badge);
+  main.appendChild(name);
+
+  const meta = document.createElement("div");
+  meta.className = "row-meta";
+  const bits = [item.session_id];
+  if (item.engine) bits.push(`${t("activity_engine", "实际引擎")}：${item.engine}`);
+  const when = formatActivityTime(item.last_at);
+  if (when) bits.push(`${t("activity_last", "最后活跃")} ${when}`);
+  if (item.count > 0) bits.push(`${t("activity_count", "累计")} ${item.count}`);
+  meta.textContent = bits.join(" · ");
+  main.appendChild(meta);
+  row.appendChild(main);
+
+  const actions = document.createElement("div");
+  actions.className = "row-actions";
+  actions.appendChild(
+    makeButton(t("activity_bind", "绑定"), "btn", () =>
+      setBinding(item.session_id, item.engine || state.activeEngine || ""),
+    ),
+  );
+  row.appendChild(actions);
+  return row;
 }
 
 function renderBindingRow(binding) {
@@ -1090,7 +1180,9 @@ function renderBindingRow(binding) {
 
 function applyBindingsPayload(data) {
   state.bindings = Array.isArray(data.bindings) ? data.bindings : [];
+  state.activity = Array.isArray(data.activity) ? data.activity : [];
   if (Array.isArray(data.engines)) state.bindingEngines = data.engines;
+  if (typeof data.active_engine === "string") state.activeEngine = data.active_engine;
   if (data.token) state.token = String(data.token);
   renderBindings();
 }

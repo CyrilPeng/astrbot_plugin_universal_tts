@@ -1121,6 +1121,80 @@ def main():
           and (res.get("data") or {}).get("imported_bindings") == 0, str(res)[:160])
     check("旧版导出文件兼容", inst._session_bindings == {"s1": "备用", "s2": DISABLED})
 
+    print("\n[36] 近期活跃")
+    inst._session_bindings = {}
+    inst._session_activity = {}
+    inst._last_activity_save_at = 0  # 绕过节流，保证断言可落盘
+    res = asyncio.run(inst.web_list_bindings())
+    check("空活跃列表", res.get("__ok__") is True
+          and (res.get("data") or {}).get("activity") == [])
+    check("payload 含 active_engine", "active_engine" in (res.get("data") or {}),
+          str(sorted((res.get("data") or {}))))
+
+    inst._record_activity("a:GroupMessage:1", "紫苏九月")
+    inst._record_activity("b:FriendMessage:2", "备用")
+    entry = inst._session_activity["a:GroupMessage:1"]
+    check("累计 1 次", entry["count"] == 1, str(entry))
+    check("引擎已记录", entry["engine"] == "紫苏九月", str(entry))
+    inst._record_activity("a:GroupMessage:1", "紫苏九月")
+    check("重复记录累计", inst._session_activity["a:GroupMessage:1"]["count"] == 2)
+    check("活跃已落盘", inst._activity_file.exists())
+
+    res = asyncio.run(inst.web_list_bindings())
+    activity = (res.get("data") or {}).get("activity") or []
+    check("两个活跃会话", len(activity) == 2, str(activity))
+    check("键齐全", all(
+        {"session_id", "display", "engine", "last_at", "count"} <= set(item)
+        for item in activity
+    ), str(activity)[:200])
+    check("后活跃的排前面", activity[0]["session_id"] == "a:GroupMessage:1",
+          str([a["session_id"] for a in activity]))
+    check("显示名可读", bool(activity[0]["display"]) and activity[0]["display"] != activity[0]["session_id"])
+    check("最近时间戳有效", activity[0]["last_at"] > 0)
+
+    # 已有显式绑定的会话不再出现在活跃分组。
+    inst._session_bindings = {"a:GroupMessage:1": "备用"}
+    res = asyncio.run(inst.web_list_bindings())
+    activity = (res.get("data") or {}).get("activity") or []
+    check("已绑定的被过滤", len(activity) == 1 and activity[0]["session_id"] == "b:FriendMessage:2",
+          str(activity))
+    inst._session_bindings = {}
+
+    # 转正后即消失。
+    web.request.payload = {"session_id": "b:FriendMessage:2", "target": "备用"}
+    res = asyncio.run(inst.web_set_binding())
+    activity = (res.get("data") or {}).get("activity") or []
+    check("转正后从活跃消失", all(a["session_id"] != "b:FriendMessage:2" for a in activity),
+          str(activity))
+    inst._session_bindings = {}
+
+    # 持久化往返。
+    inst._save_activity(force=True)
+    inst2_activity = dict(inst._session_activity)
+    inst._session_activity = {}
+    inst._load_activity()
+    check("落盘后可恢复", inst._session_activity == inst2_activity,
+          f"{inst._session_activity} vs {inst2_activity}")
+    # 超期与坏数据被丢弃。
+    inst._session_activity["old:GroupMessage:9"] = {
+        "last_at": __import__("time").time() - module.UniversalTTSPlugin.ACTIVITY_RETENTION_SECONDS - 1,
+        "engine": "紫苏九月",
+        "count": 3,
+    }
+    inst._session_activity["bad:GroupMessage:9"] = {"engine": "紫苏九月"}
+    inst._session_activity["junk"] = "not-a-dict"
+    inst._save_activity(force=True)
+    inst._session_activity = {}
+    inst._load_activity()
+    check("超期条目被丢弃", "old:GroupMessage:9" not in inst._session_activity)
+    check("坏条目被丢弃",
+          "bad:GroupMessage:9" not in inst._session_activity and "junk" not in inst._session_activity)
+    # 损坏的 JSON 不崩。
+    inst._activity_file.write_text("{oops", encoding="utf-8")
+    inst._session_activity = {"x": {"last_at": 1.0, "engine": "e", "count": 1}}
+    inst._load_activity()
+    check("损坏文件被清空", inst._session_activity == {})
+
     print()
     if failures:
         print(f"=== {len(failures)} 项失败 ===")

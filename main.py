@@ -303,7 +303,7 @@ def _read_plugin_version(fallback: str = "0.0.0") -> str:
     "astrbot_plugin_universal_tts",
     "某不科学的高数",
     "通用 TTS 插件，支持多引擎切换，通过钩子拦截实现 TTS",
-    _read_plugin_version("1.4.0"),
+    _read_plugin_version("1.4.1"),
 )
 class UniversalTTSPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -317,11 +317,14 @@ class UniversalTTSPlugin(Star):
         self._tts_audio_text: dict[str, str] = {}  # audio_path -> TTS 文本（用于引用还原）
         self._engine_stats: dict[str, dict] = {}  # instance_name -> 合成统计（内存态，重启清零）
         self._warned_skip_patterns: set[str] = set()  # 已告警过的无效跳过正则
+        self._session_activity: dict[str, dict] = {}  # session_id -> 近期活跃（只读展示用，不参与引擎选择）
+        self._last_activity_save_at = 0.0
         self._last_temp_cleanup_at = 0.0
         self._temp_dir = Path("data") / "temp" / "universal_tts"
         self._temp_dir.mkdir(parents=True, exist_ok=True)
         self._data_dir = Path("data") / "plugin_data" / "astrbot_plugin_universal_tts"
         self._bindings_file = self._data_dir / "session_bindings.json"
+        self._activity_file = self._data_dir / "session_activity.json"
         self._runtime_state_file = self._data_dir / "runtime_state.json"
         self._data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -339,6 +342,107 @@ class UniversalTTSPlugin(Star):
                 self._session_bindings = json.loads(self._bindings_file.read_text(encoding="utf-8"))
             except Exception:
                 self._session_bindings = {}
+
+    # ------------------------------------------------------------------
+    # 会话活跃记录（只读展示用，不参与引擎选择）
+    # ------------------------------------------------------------------
+
+    #: 活跃记录上限与保留期：超过即按 last_at 最旧淘汰 / 启动加载时丢弃。
+    ACTIVITY_MAX_ENTRIES = 200
+    ACTIVITY_RETENTION_SECONDS = 30 * 24 * 3600
+    ACTIVITY_SAVE_INTERVAL = 60.0
+
+    def _load_activity(self):
+        """加载会话活跃记录，丢弃超期条目。"""
+        if not self._activity_file.exists():
+            return
+        try:
+            raw = json.loads(self._activity_file.read_text(encoding="utf-8"))
+        except Exception:
+            self._session_activity = {}
+            return
+        if not isinstance(raw, dict):
+            self._session_activity = {}
+            return
+        now = time.time()
+        activity: dict[str, dict] = {}
+        for sid, entry in raw.items():
+            if not isinstance(entry, dict):
+                continue
+            last_at = entry.get("last_at", 0)
+            try:
+                last_at = float(last_at)
+            except (TypeError, ValueError):
+                continue
+            if now - last_at > self.ACTIVITY_RETENTION_SECONDS:
+                continue
+            activity[str(sid)] = {
+                "last_at": last_at,
+                "engine": str(entry.get("engine") or ""),
+                "count": max(1, int(entry.get("count", 1) or 1)),
+            }
+        # 加载时即整体截断，防止文件被外部改大后内存膨胀。
+        if len(activity) > self.ACTIVITY_MAX_ENTRIES:
+            activity = dict(
+                sorted(activity.items(), key=lambda kv: kv[1]["last_at"], reverse=True)[
+                    : self.ACTIVITY_MAX_ENTRIES
+                ]
+            )
+        self._session_activity = activity
+
+    def _save_activity(self, force: bool = False):
+        """持久化会话活跃记录（节流保存）。"""
+        now = time.time()
+        if not force and now - self._last_activity_save_at < self.ACTIVITY_SAVE_INTERVAL:
+            return
+        self._last_activity_save_at = now
+        try:
+            self._activity_file.write_text(
+                json.dumps(self._session_activity, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            logger.error(f"[UniversalTTS] 保存会话活跃记录失败: {e}")
+
+    def _record_activity(self, session_id: str, engine_name: str):
+        """记录一次成功的合成：更新时间、引擎与累计次数。"""
+        if not session_id:
+            return
+        entry = self._session_activity.get(session_id)
+        if entry is None:
+            entry = {"last_at": 0.0, "engine": "", "count": 0}
+            self._session_activity[session_id] = entry
+        entry["last_at"] = time.time()
+        entry["engine"] = engine_name
+        entry["count"] = int(entry.get("count", 0) or 0) + 1
+        if len(self._session_activity) > self.ACTIVITY_MAX_ENTRIES:
+            oldest = min(
+                self._session_activity.items(), key=lambda kv: kv[1].get("last_at", 0)
+            )[0]
+            self._session_activity.pop(oldest, None)
+        self._save_activity()
+
+    def _activity_entries(self) -> list[dict]:
+        """构造返回给 WebUI 的活跃列表：无显式绑定的会话，按最后活跃倒序。"""
+        entries: list[dict] = []
+        for session_id, entry in self._session_activity.items():
+            if session_id in self._session_bindings:
+                continue
+            try:
+                display = _format_session_id(session_id)
+            except Exception:
+                display = session_id
+            entries.append(
+                {
+                    "session_id": session_id,
+                    "display": display,
+                    "engine": str(entry.get("engine") or ""),
+                    "last_at": float(entry.get("last_at", 0) or 0),
+                    "count": int(entry.get("count", 0) or 0),
+                }
+            )
+        entries.sort(key=lambda e: e["last_at"], reverse=True)
+        return entries
 
     def _save_bindings(self):
         """持久化会话绑定到文件"""
@@ -562,6 +666,7 @@ class UniversalTTSPlugin(Star):
 
         # 加载会话绑定
         self._load_bindings()
+        self._load_activity()
         self._load_runtime_state()
         self._cleanup_temp_files(force=True)
 
@@ -688,6 +793,8 @@ class UniversalTTSPlugin(Star):
         audio_path_str = str(audio_path)
         self._tts_audio_text[audio_path_str] = full_text
         self._last_tts_text[session_id] = full_text
+        # 记录活跃：成功合成才写，跳过/失败/暂停的不记。
+        self._record_activity(session_id, engine.instance_name)
         logger.info(f"[UniversalTTS] 发送语音 ({engine.instance_name}): {full_text[:80]}")
         record = Comp.Record(file=audio_path_str, url=audio_path_str)
         original_chain = list(result.chain)
@@ -2366,6 +2473,7 @@ class UniversalTTSPlugin(Star):
     def _bindings_payload(self) -> dict:
         return {
             "bindings": self._binding_entries(),
+            "activity": self._activity_entries(),
             "engines": sorted(
                 {
                     str(e.get("instance_name") or "").strip()
@@ -2375,6 +2483,7 @@ class UniversalTTSPlugin(Star):
             ),
             "disabled_engine": DISABLED_ENGINE,
             "token": self._config_token(),
+            "active_engine": str(self.config.get("active_engine") or ""),
         }
 
     async def web_list_bindings(self):
@@ -2534,6 +2643,7 @@ class UniversalTTSPlugin(Star):
             return error_response("没有可导入的字段")
 
         # 绑定导入：整体替换，引擎名必须在（导入后的）引擎列表或禁音值中。
+        # 注意：导入只替换显式绑定；活跃记录是只读视图，不受导入影响。
         imported_bindings = 0
         if incoming_bindings is not None:
             if not isinstance(incoming_bindings, list):
@@ -2579,4 +2689,5 @@ class UniversalTTSPlugin(Star):
         for engine in self._cached_engines.values():
             await engine.close()
         self._cached_engines.clear()
+        self._save_activity(force=True)
         logger.info("[UniversalTTS] 引擎资源已释放")

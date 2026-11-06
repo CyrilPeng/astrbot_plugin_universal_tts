@@ -529,6 +529,17 @@ input[type="checkbox"] {
   border-color: #d9534f;
 }
 
+.bindings-group-title {
+  margin: 6px 0 8px;
+  font-size: 13px;
+  opacity: 0.75;
+}
+
+.bindings-divider {
+  margin: 16px 0 4px;
+  border-top: 1px dashed var(--border);
+}
+
 .history-block {
   margin-top: 24px;
   border-top: 1px solid var(--border);
