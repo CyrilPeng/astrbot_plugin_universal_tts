@@ -1144,28 +1144,40 @@ def main():
     activity = (res.get("data") or {}).get("activity") or []
     check("两个活跃会话", len(activity) == 2, str(activity))
     check("键齐全", all(
-        {"session_id", "display", "engine", "last_at", "count"} <= set(item)
+        {"session_id", "display", "engine", "last_at", "count", "binding"} <= set(item)
         for item in activity
     ), str(activity)[:200])
+    check("未绑定时标注为空", all(item["binding"] == "" for item in activity), str(activity)[:200])
     check("后活跃的排前面", activity[0]["session_id"] == "a:GroupMessage:1",
           str([a["session_id"] for a in activity]))
     check("显示名可读", bool(activity[0]["display"]) and activity[0]["display"] != activity[0]["session_id"])
     check("最近时间戳有效", activity[0]["last_at"] > 0)
 
-    # 已有显式绑定的会话不再出现在活跃分组。
+    # 已绑定的会话保留在活跃列表，但带状态标注（前端据此筛选视图）。
     inst._session_bindings = {"a:GroupMessage:1": "备用"}
     res = asyncio.run(inst.web_list_bindings())
     activity = (res.get("data") or {}).get("activity") or []
-    check("已绑定的被过滤", len(activity) == 1 and activity[0]["session_id"] == "b:FriendMessage:2",
-          str(activity))
+    annotated = {item["session_id"]: item["binding"] for item in activity}
+    check("已绑定的带状态标注", annotated.get("a:GroupMessage:1") == "备用", str(annotated))
+    check("未绑定的标注为空", annotated.get("b:FriendMessage:2") == "", str(annotated))
     inst._session_bindings = {}
 
-    # 转正后即消失。
+    disabled = inst._bindings_payload()["disabled_engine"]
+    inst._session_bindings = {"a:GroupMessage:1": disabled}
+    activity = inst._activity_entries()
+    check("禁音绑定的标注", activity[0]["binding"] == disabled, str(activity))
+    inst._session_bindings = {}
+
+    # 转正后进入显式绑定列表，活跃条目同步带绑定标注。
     web.request.payload = {"session_id": "b:FriendMessage:2", "target": "备用"}
     res = asyncio.run(inst.web_set_binding())
-    activity = (res.get("data") or {}).get("activity") or []
-    check("转正后从活跃消失", all(a["session_id"] != "b:FriendMessage:2" for a in activity),
-          str(activity))
+    data = res.get("data") or {}
+    activity = data.get("activity") or []
+    check("转正后进入显式绑定",
+          any(b["session_id"] == "b:FriendMessage:2" for b in data.get("bindings") or []),
+          str(data.get("bindings"))[:200])
+    turned = next((a for a in activity if a["session_id"] == "b:FriendMessage:2"), {})
+    check("转正后活跃条目标注绑定", turned.get("binding") == "备用", str(activity))
     inst._session_bindings = {}
 
     # 持久化往返。

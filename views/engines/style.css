@@ -540,6 +540,41 @@ input[type="checkbox"] {
   border-top: 1px dashed var(--border);
 }
 
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.filter-chip {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: inherit;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  opacity: 0.75;
+  transition: opacity 0.15s ease, border-color 0.15s ease;
+}
+
+.filter-chip:hover {
+  opacity: 1;
+}
+
+.filter-chip-active {
+  border-color: var(--accent, #4a90d9);
+  color: var(--accent, #4a90d9);
+  opacity: 1;
+  font-weight: 600;
+}
+
+.badge-muted {
+  background: var(--border, #ddd);
+  color: var(--text-muted, #888);
+}
+
 .history-block {
   margin-top: 24px;
   border-top: 1px solid var(--border);

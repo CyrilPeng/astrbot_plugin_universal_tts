@@ -303,7 +303,7 @@ def _read_plugin_version(fallback: str = "0.0.0") -> str:
     "astrbot_plugin_universal_tts",
     "某不科学的高数",
     "通用 TTS 插件，支持多引擎切换，通过钩子拦截实现 TTS",
-    _read_plugin_version("1.4.1"),
+    _read_plugin_version("1.4.2"),
 )
 class UniversalTTSPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -423,11 +423,9 @@ class UniversalTTSPlugin(Star):
         self._save_activity()
 
     def _activity_entries(self) -> list[dict]:
-        """构造返回给 WebUI 的活跃列表：无显式绑定的会话，按最后活跃倒序。"""
+        """构造返回给 WebUI 的活跃列表（含已绑定会话，前端按筛选视图取用），按最后活跃倒序。"""
         entries: list[dict] = []
         for session_id, entry in self._session_activity.items():
-            if session_id in self._session_bindings:
-                continue
             try:
                 display = _format_session_id(session_id)
             except Exception:
@@ -439,6 +437,8 @@ class UniversalTTSPlugin(Star):
                     "engine": str(entry.get("engine") or ""),
                     "last_at": float(entry.get("last_at", 0) or 0),
                     "count": int(entry.get("count", 0) or 0),
+                    # 当前绑定状态：""=跟随全局，DISABLED_ENGINE=禁音，其余为引擎名
+                    "binding": str(self._session_bindings.get(session_id, "") or ""),
                 }
             )
         entries.sort(key=lambda e: e["last_at"], reverse=True)
