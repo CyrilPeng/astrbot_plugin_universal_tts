@@ -303,7 +303,7 @@ def _read_plugin_version(fallback: str = "0.0.0") -> str:
     "astrbot_plugin_universal_tts",
     "某不科学的高数",
     "通用 TTS 插件，支持多引擎切换，通过钩子拦截实现 TTS",
-    _read_plugin_version("1.4.2"),
+    _read_plugin_version("1.4.3"),
 )
 class UniversalTTSPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -1188,6 +1188,8 @@ class UniversalTTSPlugin(Star):
             audio_path = self._temp_dir / f"tts_test_{uuid.uuid4().hex}.{fmt}"
             await asyncio.to_thread(audio_path.write_bytes, audio_bytes)
             self._cleanup_temp_files()
+            # 试听也是该会话真实出过语音，计入活跃（与自动合成同一写入口径）。
+            self._record_activity(session_id, engine.instance_name)
             yield event.chain_result(
                 [Comp.Record(file=str(audio_path), url=str(audio_path))]
             )

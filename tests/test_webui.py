@@ -1207,6 +1207,11 @@ def main():
     inst._load_activity()
     check("损坏文件被清空", inst._session_activity == {})
 
+    # /tts_test 也计入活跃：两个写入口径（自动合成 + 试听）都要接线。
+    check("tts_test 记录活跃已接线",
+          source.count("self._record_activity(session_id, engine.instance_name)") >= 2,
+          str(source.count("self._record_activity(session_id, engine.instance_name)")))
+
     print()
     if failures:
         print(f"=== {len(failures)} 项失败 ===")

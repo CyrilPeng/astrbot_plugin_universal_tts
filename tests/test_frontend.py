@@ -82,6 +82,16 @@ declared = set(re.findall(r'"(\w+)"', m.group(1))) if m else set()
 if declared != tabs:
     fail(f"TABS 与 HTML 标签不一致: {sorted(declared)} vs {sorted(tabs)}")
 
+# 8. 沙箱 iframe（opaque origin）下不可用的存储 API 不得出现
+for api in ("localStorage", "sessionStorage", "document.cookie"):
+    if re.search(rf"\b{re.escape(api)}\b", stripped):
+        fail(f"检测到沙箱内不可用的存储 API: {api}（opaque origin 下抛 SecurityError）")
+
+# 9. 一键绑定的回退目标必须排除禁音值（否则"绑定引擎"会变成"静音会话"）
+if "state.activeEngine" in JS and "state.disabled_engine" in JS:
+    if "state.activeEngine !== state.disabled_engine" not in JS:
+        fail("activeEngine 兜底缺少禁音值守卫")
+
 print(f"els 引用 {len(used)} 个，DOM id {len(ids)} 个，i18n 键 {len(keys)} 个，标签 {len(tabs)} 个")
 if failures:
     print(f"\n=== {len(failures)} 项不一致 ===")

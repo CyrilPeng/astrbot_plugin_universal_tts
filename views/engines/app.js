@@ -1206,14 +1206,23 @@ function renderActivityRow(item) {
   row.appendChild(main);
 
   if (!item.binding) {
-    const actions = document.createElement("div");
-    actions.className = "row-actions";
-    actions.appendChild(
-      makeButton(t("activity_bind", "绑定"), "btn", () =>
-        setBinding(item.session_id, item.engine || state.activeEngine || ""),
-      ),
-    );
-    row.appendChild(actions);
+    // 回退目标必须是一个真实引擎：全局默认关闭时 active_engine 是禁音值，
+    // 拿它兜底会把"绑定引擎"变成"静音该会话"，没有有效目标就不渲染按钮。
+    const fallback =
+      state.activeEngine && state.activeEngine !== state.disabled_engine
+        ? state.activeEngine
+        : "";
+    const bindTarget = item.engine || fallback;
+    if (bindTarget) {
+      const actions = document.createElement("div");
+      actions.className = "row-actions";
+      actions.appendChild(
+        makeButton(t("activity_bind", "绑定"), "btn", () =>
+          setBinding(item.session_id, bindTarget),
+        ),
+      );
+      row.appendChild(actions);
+    }
   }
   return row;
 }
