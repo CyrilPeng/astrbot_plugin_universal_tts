@@ -1212,6 +1212,62 @@ def main():
           source.count("self._record_activity(session_id, engine.instance_name)") >= 2,
           str(source.count("self._record_activity(session_id, engine.instance_name)")))
 
+    print("\n[37] 核心 TTS 抑制")
+
+    class _FakeCT:
+        LLM_RESULT = "llm"
+        GENERAL_RESULT = "general"
+
+    class _FakeResult:
+        def __init__(self, ct):
+            self.result_content_type = ct
+
+        def set_result_content_type(self, t):
+            self.result_content_type = t
+
+    orig_ct = getattr(module, "ResultContentType", None)
+    orig_ctx_cfg = getattr(inst.context, "astrbot_config", None)
+    try:
+        module.ResultContentType = _FakeCT
+        inst.context.astrbot_config = {}
+
+        res = _FakeResult(_FakeCT.LLM_RESULT)
+        inst._suppress_core_tts(res)
+        check("LLM 结果被标记为普通结果", res.result_content_type == _FakeCT.GENERAL_RESULT,
+              str(res.result_content_type))
+
+        res = _FakeResult(_FakeCT.GENERAL_RESULT)
+        inst._suppress_core_tts(res)
+        check("已是普通结果则不动", res.result_content_type == _FakeCT.GENERAL_RESULT)
+
+        inst.context.astrbot_config = {"content_safety": {"content_safe_check_reply": True}}
+        res = _FakeResult(_FakeCT.LLM_RESULT)
+        inst._suppress_core_tts(res)
+        check("内容安全回复检查开启时不抑制", res.result_content_type == _FakeCT.LLM_RESULT,
+              str(res.result_content_type))
+        inst.context.astrbot_config = {}
+
+        module.ResultContentType = None
+        res = _FakeResult(_FakeCT.LLM_RESULT)
+        inst._suppress_core_tts(res)
+        check("枚举缺失时安全降级", res.result_content_type == _FakeCT.LLM_RESULT)
+        module.ResultContentType = _FakeCT
+
+        res = _FakeResult(None)
+        inst._suppress_core_tts(res)
+        check("异常对象不崩", res.result_content_type is None)
+    finally:
+        module.ResultContentType = orig_ct
+        if orig_ctx_cfg is None:
+            if hasattr(inst.context, "astrbot_config"):
+                delattr(inst.context, "astrbot_config")
+        else:
+            inst.context.astrbot_config = orig_ctx_cfg
+
+    check("抑制已接入全部跳过点", source.count("self._suppress_core_tts(result)") >= 6,
+          str(source.count("self._suppress_core_tts(result)")))
+    check("枚举带回退导入", "ResultContentType = None" in source)
+
     print()
     if failures:
         print(f"=== {len(failures)} 项失败 ===")

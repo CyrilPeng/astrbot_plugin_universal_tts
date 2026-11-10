@@ -23,6 +23,13 @@ try:
 except Exception:
     SessionServiceManager = None
 
+# 用于在插件按规则跳过合成时，抑制 AstrBot 核心 TTS 管道的接管（见 _suppress_core_tts）。
+# 旧版本可能没有该枚举，导入失败时静默降级为"不抑制"。
+try:
+    from astrbot.core.message.message_event_result import ResultContentType
+except Exception:  # pragma: no cover - 旧版本 AstrBot
+    ResultContentType = None
+
 # WebUI（插件可视化视图）后端 API 依赖 AstrBot >= 4.25.0。
 # 导入失败时静默降级：旧版本会忽略 views/ 目录，插件其余功能完全不受影响。
 try:
@@ -303,7 +310,7 @@ def _read_plugin_version(fallback: str = "0.0.0") -> str:
     "astrbot_plugin_universal_tts",
     "某不科学的高数",
     "通用 TTS 插件，支持多引擎切换，通过钩子拦截实现 TTS",
-    _read_plugin_version("1.4.3"),
+    _read_plugin_version("1.4.4"),
 )
 class UniversalTTSPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -715,12 +722,50 @@ class UniversalTTSPlugin(Star):
         if self._session_bindings:
             logger.info(f"[UniversalTTS] 已加载 {len(self._session_bindings)} 个会话绑定")
 
+    def _suppress_core_tts(self, result) -> None:
+        """把结果标记为普通消息，避免核心 TTS 管道接管本插件按规则跳过的文本。
+
+        背景：插件的字数上限 / 智能跳过 / 触发概率 / tts_off / 会话禁音的语义都是
+        「这条回复不转语音」，但核心 result_decorate 阶段只要 provider_tts_settings.enable
+        且配置了 TTS 提供商，就会把链中全部 Plain 重新合成一遍——无视插件的任何限制，
+        导致超长文本被核心合成数分钟的语音（2026-11-10 用户实测）。
+
+        这里通过 set_result_content_type(GENERAL_RESULT) 让核心的 is_llm_result() 判定为
+        False，从而跳过核心 TTS。仅在「内容安全-回复检查」未启用时抑制：该检查在核心里
+        同样以 is_llm_result() 为条件，不能因插件而绕过。
+        """
+        if ResultContentType is None:
+            return
+        try:
+            if getattr(result, "result_content_type", None) != ResultContentType.LLM_RESULT:
+                return
+            astrbot_config = getattr(self.context, "astrbot_config", None) or getattr(
+                self.context, "_config", None
+            )
+            safety_cfg = (astrbot_config or {}).get("content_safety") or {}
+            if safety_cfg.get("content_safe_check_reply"):
+                logger.debug(
+                    "[UniversalTTS] 内容安全回复检查已启用，保留核心 LLM 标记，不抑制核心 TTS"
+                )
+                return
+            result.set_result_content_type(ResultContentType.GENERAL_RESULT)
+            logger.debug("[UniversalTTS] 已标记为普通结果，核心 TTS 不会再接管本条回复")
+        except Exception as e:
+            logger.debug(f"[UniversalTTS] 抑制核心 TTS 失败（忽略）: {e}")
+
     @filter.on_decorating_result(priority=0)
     async def tts_hook(self, event: AstrMessageEvent):
         """钩子：在消息发送前将文本转为语音"""
         if not self.config.get("enable", True):
+            # 插件总开关关闭：交还给 AstrBot 原生行为（核心 TTS 若配置了提供商会照常工作）。
             return
+
+        result = event.get_result() if event is not None else None
+
         if not self._runtime_enabled:
+            # /tts_off：本插件不合成，同时抑制核心 TTS，避免"暂停自动 TTS"被核心接管架空。
+            if result:
+                self._suppress_core_tts(result)
             return
         if not await self._is_astrbot_tts_enabled(event):
             return
@@ -728,11 +773,14 @@ class UniversalTTSPlugin(Star):
         # TTS 触发概率
         probability = self.config.get("tts_probability", 100)
         if probability <= 0:
+            if result:
+                self._suppress_core_tts(result)
             return
         if probability < 100 and random.randint(1, 100) > probability:
+            if result:
+                self._suppress_core_tts(result)
             return
 
-        result = event.get_result()
         if not result or not result.chain:
             return
 
@@ -759,16 +807,22 @@ class UniversalTTSPlugin(Star):
                 logger.debug(
                     f"[UniversalTTS] 文本字数 ({len(full_text)}) 超过上限 ({limit})，跳过 TTS"
                 )
+                self._suppress_core_tts(result)
                 return
 
         # 智能跳过：代码块、纯链接、自定义正则
         skip_reason = self._should_skip_tts(full_text)
         if skip_reason:
             logger.debug(f"[UniversalTTS] 命中跳过规则 ({skip_reason})，跳过 TTS")
+            self._suppress_core_tts(result)
             return
 
         # 获取当前会话应使用的引擎
         session_id = _get_session_id(event)
+        # 会话被 /tts_bind 0 禁音：明确不合成，同样抑制核心 TTS 接管。
+        if self._session_bindings.get(session_id) == DISABLED_ENGINE:
+            self._suppress_core_tts(result)
+            return
         engine = self._get_engine_for_session(session_id)
         if engine is None:
             return
