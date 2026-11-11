@@ -8,7 +8,7 @@
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-blue?style=flat-square)](https://github.com/AstrBotDevs/AstrBot)
 [![License](https://img.shields.io/badge/License-AGPL--3.0-green?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.4.4-orange?style=flat-square)]()
+[![Version](https://img.shields.io/badge/Version-1.4.5-orange?style=flat-square)]()
 [![CI](https://github.com/CyrilPeng/astrbot_plugin_universal_tts/actions/workflows/ci.yml/badge.svg)](https://github.com/CyrilPeng/astrbot_plugin_universal_tts/actions/workflows/ci.yml)
 
 一个为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 打造的通用语音合成插件。
@@ -34,8 +34,7 @@
 
 | 提供商 | 引擎 | 特点 |
 |--------|------|------|
-| **MiMo** | V2-TTS | 预置音色 + `<style>` 标签风格控制 |
-| **MiMo** | V2.5-TTS | 精品音色 + 自然语言风格控制 |
+| **MiMo** | V2.5-TTS | 精品音色 + 自然语言/标签风格控制，支持唱歌模式（官方 V2-TTS 已于 2026-06-30 下线并静默映射至 V2.5） |
 | **MiMo** | V2.5-VoiceDesign | 文本描述生成音色 |
 | **MiMo** | V2.5-VoiceClone | 音频样本克隆任意音色 |
 | **OpenAI** | 兼容 TTS | `/v1/audio/speech` 标准接口 |

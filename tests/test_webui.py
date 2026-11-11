@@ -250,14 +250,15 @@ SAMPLE_ENGINES = [
     },
     {
         "instance_name": "备用",
-        "__template_key": "mimo_v2",
+        "__template_key": "mimo_v2_5",
         "api_key": "",
         "api_base": "https://api.xiaomimimo.com/v1",
-        "model": "mimo-v2-tts",
+        "model": "mimo-v2.5-tts",
         "voice": "mimo_default",
         "format": "wav",
         "style": "",
-        "seed_text": "",
+        "style_prompt": "",
+        "singing_mode": False,
         "timeout": "30",
     },
 ]
@@ -335,7 +336,7 @@ def main():
     check("_secrets 标记正确", e0["_secrets"] == ["api_key"], str(e0.get("_secrets")))
     check("空密钥不列入 _secrets", e1["_secrets"] == [])
     check("非敏感字段保留", e0["api_base"].endswith("/v1"))
-    check("templates 已返回", len(payload["templates"]) == 10, str(len(payload["templates"])))
+    check("templates 已返回", len(payload["templates"]) == 9, str(len(payload["templates"])))
 
     print("\n[3] 字段类型转换")
     check("int 转换", inst._coerce_field("30", "int", 0) == 30)
@@ -347,13 +348,15 @@ def main():
 
     print("\n[4] 敏感字段留空 = 不修改")
     normalized = inst._normalize_engine(
-        "mimo_v2",
+        "mimo_v2_5",
         {"instance_name": "备用", "api_key": "", "timeout": "45"},
         dict(cfg["engines"][1], api_key="EXISTING-KEY"),
     )
     check("原密钥保留", normalized["api_key"] == "EXISTING-KEY")
     check("timeout 已转 int", normalized["timeout"] == 45)
-    check("__template_key 正确", normalized["__template_key"] == "mimo_v2")
+    check("__template_key 正确", normalized["__template_key"] == "mimo_v2_5")
+    check("singing_mode 默认 False", normalized.get("singing_mode") is False,
+          repr(normalized.get("singing_mode")))
 
     print("\n[5] index 校验")
     check("None → None", inst._as_index(None, 3) is None)
@@ -383,12 +386,12 @@ def main():
     print("\n[8] 重名 / 空名校验")
     web.request.payload = {
         "index": None,
-        "engine": {"__template_key": "mimo_v2", "instance_name": "备用"},
+        "engine": {"__template_key": "mimo_v2_5", "instance_name": "备用"},
     }
     check("重名被拒绝", asyncio.run(inst.web_save_engine()).get("__ok__") is False)
     web.request.payload = {
         "index": None,
-        "engine": {"__template_key": "mimo_v2", "instance_name": "   "},
+        "engine": {"__template_key": "mimo_v2_5", "instance_name": "   "},
     }
     check("空名被拒绝", asyncio.run(inst.web_save_engine()).get("__ok__") is False)
 
@@ -1267,6 +1270,90 @@ def main():
     check("抑制已接入全部跳过点", source.count("self._suppress_core_tts(result)") >= 6,
           str(source.count("self._suppress_core_tts(result)")))
     check("枚举带回退导入", "ResultContentType = None" in source)
+
+    print("\n[38] MiMo v2 迁移与唱歌模式")
+
+    # v2 模板必须已从 schema 移除
+    schema = inst._read_schema()
+    check("schema 已移除 mimo_v2", "mimo_v2" not in schema.get("engines", {}).get("templates", {}))
+    check("singing_mode 已入 schema",
+          "singing_mode" in inst._engine_templates()["mimo_v2_5"]["items"])
+
+    # 存量实例迁移：字段映射 + 落盘
+    saved_before = cfg.saved
+    cfg["engines"] = [
+        {
+            "instance_name": "旧v2实例",
+            "__template_key": "mimo_v2",
+            "api_key": "sk-old",
+            "voice": "default_zh",
+            "seed_text": "用温柔的语气",
+            "style": "慵懒",
+            "timeout": 30,
+        },
+        json.loads(json.dumps(SAMPLE_ENGINES[0])),
+    ]
+    asyncio.run(inst._migrate_mimo_v2_instances())
+    migrated = cfg["engines"][0]
+    check("模板键已迁移", migrated["__template_key"] == "mimo_v2_5", migrated["__template_key"])
+    check("seed_text 迁移为 style_prompt", migrated.get("style_prompt") == "用温柔的语气",
+          str(migrated.get("style_prompt")))
+    check("seed_text 已移除", "seed_text" not in migrated)
+    check("v2 音色映射 mimo_default", migrated.get("voice") == "mimo_default", str(migrated.get("voice")))
+    check("迁移已落盘", cfg.saved > saved_before)
+    check("正常实例不受影响", cfg["engines"][1]["__template_key"] == "mimo_v2_5_voiceclone")
+    # 幂等：再跑一次无变化
+    saved_mid = cfg.saved
+    asyncio.run(inst._migrate_mimo_v2_instances())
+    check("迁移幂等", cfg.saved == saved_mid)
+
+    # 真实 v2.5 引擎类的标签构建
+    import importlib.util as _ilu
+
+    _pkg_name = "tts_real_engines"
+    _spec = _ilu.spec_from_file_location(
+        _pkg_name,
+        PLUGIN_DIR / "engines" / "__init__.py",
+        submodule_search_locations=[str(PLUGIN_DIR / "engines")],
+    )
+    _pkg = _ilu.module_from_spec(_spec)
+    sys.modules[_pkg_name] = _pkg
+    _spec.loader.exec_module(_pkg)
+    V25 = _pkg.MiMoV25Engine
+    check("注册表已移除 mimo_v2", "mimo_v2" not in _pkg.ENGINE_REGISTRY)
+
+    def _prefix(style="", singing=False, text="月亮代表我的心"):
+        e = V25({"api_key": "k", "style": style, "singing_mode": singing})
+        payload = e._build_payload(text)
+        return payload["messages"][-1]["content"]
+
+    check("纯文本无标签", _prefix() == "月亮代表我的心")
+    check("唱歌开关加标签", _prefix(singing=True) == "(唱歌)月亮代表我的心")
+    # 实测结论：唱歌与风格不能共用括号，否则唱歌失效 → 必须 (唱歌)(风格)文本
+    check("开关与风格各自成括号", _prefix(style="深情", singing=True) == "(唱歌)(深情)月亮代表我的心")
+    check("多风格逗号分隔", _prefix(style="深情，慵懒") == "(深情 慵懒)月亮代表我的心")
+    check("半角逗号", _prefix(style="深情,慵懒") == "(深情 慵懒)月亮代表我的心")
+    check("顿号分隔", _prefix(style="深情、慵懒") == "(深情 慵懒)月亮代表我的心")
+    check("空白分隔", _prefix(style="深情  慵懒") == "(深情 慵懒)月亮代表我的心")
+    check("风格去重", _prefix(style="温柔，温柔") == "(温柔)月亮代表我的心")
+    check("style 里写唱歌等同开关",
+          _prefix(style="深情 唱歌") == "(唱歌)(深情)月亮代表我的心",
+          _prefix(style="深情 唱歌"))
+    check("style 写英文 sing 也识别",
+          _prefix(style="sing, 深情") == "(唱歌)(深情)月亮代表我的心",
+          _prefix(style="sing, 深情"))
+    check("文本自带唱歌标签不重复",
+          _prefix(singing=True, text="(唱歌)原谅我这一生") == "(唱歌)原谅我这一生")
+    check("文本自带英文标签不重复", _prefix(singing=True, text="[sing]la la") == "[sing]la la")
+    check("唱歌+风格+自带标签不叠唱歌",
+          _prefix(style="温柔", singing=True, text="(唱歌)词") == "(温柔)(唱歌)词",
+          _prefix(style="温柔", singing=True, text="(唱歌)词"))
+    e = V25({"api_key": "k", "style_prompt": "用温柔的语气", "singing_mode": True})
+    payload = e._build_payload("文本")
+    check("style_prompt 走 user message",
+          payload["messages"][0] == {"role": "user", "content": "用温柔的语气"})
+    check("audio 结构正确", payload["audio"] == {"format": "wav", "voice": "mimo_default"})
+    check("模型默认 v2.5", payload["model"] == "mimo-v2.5-tts")
 
     print()
     if failures:

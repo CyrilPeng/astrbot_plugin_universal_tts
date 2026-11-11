@@ -1,7 +1,7 @@
 """TTS 引擎工厂模块"""
 
 from .base import TTSEngine
-from .mimo import MiMoV2Engine, MiMoV25Engine, MiMoV25DesignEngine, MiMoV25CloneEngine
+from .mimo import MiMoV25Engine, MiMoV25CloneEngine, MiMoV25DesignEngine
 from .openai import OpenAICompatEngine
 from .volcengine import VolcengineEngine
 from .aliyun import AliyunEngine
@@ -10,7 +10,6 @@ from .elevenlabs import ElevenLabsEngine
 from .custom_http import CustomHTTPEngine
 
 ENGINE_REGISTRY: dict[str, type[TTSEngine]] = {
-    "mimo_v2": MiMoV2Engine,
     "mimo_v2_5": MiMoV25Engine,
     "mimo_v2_5_voicedesign": MiMoV25DesignEngine,
     "mimo_v2_5_voiceclone": MiMoV25CloneEngine,

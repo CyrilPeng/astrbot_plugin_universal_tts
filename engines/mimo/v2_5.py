@@ -1,10 +1,17 @@
 """MiMo V2.5 TTS 引擎（预置音色）"""
 
 import base64
+import re
 
 import httpx
 
 from ..base import TTSEngine
+
+#: 风格串分隔符：中英文逗号、顿号、分号与空白都视为分隔。
+_STYLE_SPLIT_RE = re.compile(r"[,，、;；\s]+")
+
+#: 在风格里写这些词等同于开启唱歌模式。
+_SINGING_WORDS = {"唱歌", "sing", "singing"}
 
 
 class MiMoV25Engine(TTSEngine):
@@ -28,6 +35,7 @@ class MiMoV25Engine(TTSEngine):
         self.audio_format: str = config.get("format", "wav")
         self.style: str = config.get("style", "")
         self.style_prompt: str = config.get("style_prompt", "")
+        self.singing_mode: bool = bool(config.get("singing_mode", False))
         self.timeout: int = config.get("timeout", 60)
         self._client: httpx.AsyncClient | None = None
 
@@ -40,14 +48,52 @@ class MiMoV25Engine(TTSEngine):
             self._client = httpx.AsyncClient(timeout=self.timeout)
         return self._client
 
+    @staticmethod
+    def _has_singing_tag(text: str) -> bool:
+        """文本是否已自带 (唱歌)/(sing)/(singing) 标签，避免重复叠加。"""
+        return bool(
+            re.match(r"^\s*[(\[（]\s*(?:唱歌|sing|singing)\s*[)\]）]", text or "", re.IGNORECASE)
+        )
+
+    @classmethod
+    def _split_styles(cls, raw: str) -> list[str]:
+        """把用户输入的风格拆成词：兼容中英文逗号、顿号、分号与空白，去重保序。"""
+        tokens: list[str] = []
+        for token in _STYLE_SPLIT_RE.split(raw or ""):
+            token = token.strip()
+            if token and token not in tokens:
+                tokens.append(token)
+        return tokens
+
     def _build_style_prefix(self, text: str) -> str:
-        """构建 (风格) 标签前缀（V2.5 使用圆括号）"""
-        if not self.style.strip():
-            return text
-        style_content = self.style.strip()
-        if "唱歌" in style_content:
-            return f"(唱歌){text}"
-        return f"({style_content}){text}"
+        """构建标签前缀。
+
+        实测（2026-11-11，真实 API）：
+        - ``(唱歌)歌词``            → 唱歌生效
+        - ``(温柔)歌词``            → 仅风格
+        - ``(唱歌 温柔)歌词``       → **唱歌失效**，官方只当普通风格解析
+        - ``(唱歌)(温柔)歌词``      → 唱歌与风格同时生效
+        - ``(温柔)(唱歌)歌词``      → 唱歌失效（唱歌标签必须在最前）
+
+        所以唱歌标签必须独占最前的一个括号，风格标签另起一个括号紧随其后。
+        用户只需在「风格」里用逗号分隔（如「温柔，慵懒」），括号由这里生成。
+        """
+        text_has_singing = self._has_singing_tag(text)
+        styles: list[str] = []
+        singing = self.singing_mode
+        for token in self._split_styles(self.style):
+            # 风格里手写「唱歌/sing/singing」等同于开启唱歌模式，且不作为风格词。
+            if token.strip().lower() in _SINGING_WORDS:
+                singing = True
+            else:
+                styles.append(token)
+        if text_has_singing:
+            # 文本已自带唱歌标签，视为用户自行控制，不重复追加唱歌标签。
+            singing = False
+        prefix = "(唱歌)" if singing else ""
+        if styles:
+            prefix += "(" + " ".join(styles) + ")"
+        return prefix + text
 
     def _build_payload(self, text: str) -> dict:
         messages: list[dict[str, str]] = []

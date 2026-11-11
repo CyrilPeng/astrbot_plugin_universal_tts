@@ -310,7 +310,7 @@ def _read_plugin_version(fallback: str = "0.0.0") -> str:
     "astrbot_plugin_universal_tts",
     "某不科学的高数",
     "通用 TTS 插件，支持多引擎切换，通过钩子拦截实现 TTS",
-    _read_plugin_version("1.4.4"),
+    _read_plugin_version("1.4.5"),
 )
 class UniversalTTSPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -677,6 +677,9 @@ class UniversalTTSPlugin(Star):
         self._load_runtime_state()
         self._cleanup_temp_files(force=True)
 
+        # MiMo v2 模板已随官方下线移除，存量实例自动迁移到 v2.5
+        await self._migrate_mimo_v2_instances()
+
         # 获取引擎配置列表
         engines_config: list[dict] = self.config.get("engines", [])
         if not engines_config:
@@ -721,6 +724,36 @@ class UniversalTTSPlugin(Star):
         logger.info(f"[UniversalTTS] 已启用，全局引擎: {instance_name} (类型: {template_key})")
         if self._session_bindings:
             logger.info(f"[UniversalTTS] 已加载 {len(self._session_bindings)} 个会话绑定")
+
+    async def _migrate_mimo_v2_instances(self) -> None:
+        """把存量的 mimo_v2 引擎实例迁移到 mimo_v2_5。
+
+        官方已于 2026-06-30 下线 mimo-v2-tts 并静默映射到 mimo-v2.5-tts
+        （音色重映射：mimo_default → 中国集群「冰糖」），v2 模板随之移除。
+        迁移要点：
+        - __template_key: mimo_v2 → mimo_v2_5（引擎类同源，消息结构 v2.5 兼容）
+        - seed_text（v2 的 user message）→ style_prompt（v2.5 同语义字段）
+        - v2 独有音色 default_zh / default_en → mimo_default
+        """
+        changed = False
+        migrated = 0
+        for ec in self.config.get("engines") or []:
+            if not isinstance(ec, dict) or ec.get("__template_key") != "mimo_v2":
+                continue
+            ec["__template_key"] = "mimo_v2_5"
+            seed = str(ec.get("seed_text") or "").strip()
+            if seed and not str(ec.get("style_prompt") or "").strip():
+                ec["style_prompt"] = seed
+            ec.pop("seed_text", None)
+            if str(ec.get("voice") or "").strip() in ("default_zh", "default_en"):
+                ec["voice"] = "mimo_default"
+            migrated += 1
+        if not migrated:
+            return
+        await self._persist_config()
+        detail = f"MiMo v2 模板已下线，自动迁移 {migrated} 个引擎实例到 v2.5"
+        logger.info(f"[UniversalTTS] {detail}")
+        self._append_history("engine.migrate", detail)
 
     def _suppress_core_tts(self, result) -> None:
         """把结果标记为普通消息，避免核心 TTS 管道接管本插件按规则跳过的文本。
