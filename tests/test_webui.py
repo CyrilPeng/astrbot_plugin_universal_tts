@@ -3,6 +3,7 @@
 import asyncio
 import atexit
 import importlib.util
+import inspect
 import json
 import os
 import shutil
@@ -665,8 +666,13 @@ def main():
     check("读取成功", res.get("__ok__") is True, str(res)[:160])
     payload = res.get("data") or {}
     fields = {f["key"]: f for f in payload.get("fields", [])}
-    check("返回 11 个字段", len(fields) == 11, str(sorted(fields)))
+    check("返回 12 个字段", len(fields) == 12, str(sorted(fields)))
     check("含智能跳过字段", "tts_skip_code_blocks" in fields and "tts_skip_patterns" in fields)
+    check(
+        "含用户意图跳过字段",
+        "tts_skip_user_intent_patterns" in fields,
+        str(sorted(fields)),
+    )
     check("不含 engines", "engines" not in fields)
     check("不含 active_engine", "active_engine" not in fields)
     check("不含 voice_clone_samples", "voice_clone_samples" not in fields)
@@ -1058,6 +1064,41 @@ def main():
     check("schema 默认值正确",
           schema["tts_skip_code_blocks"].get("default") is True
           and schema["tts_skip_patterns"].get("default") == [])
+    check("schema 含用户意图字段", "tts_skip_user_intent_patterns" in schema)
+    check(
+        "用户意图默认规则一致",
+        schema["tts_skip_user_intent_patterns"].get("default")
+        == module.DEFAULT_USER_INTENT_PATTERNS,
+    )
+
+    # 用户意图规则：匹配用户消息，而不是机器人回复
+    inst.config.pop("tts_skip_user_intent_patterns", None)
+    check(
+        "意图-介绍命中",
+        inst._should_skip_user_intent("介绍一下 Python") != "",
+    )
+    check(
+        "意图-名称命中",
+        inst._should_skip_user_intent("这个人的名字是什么") != "",
+    )
+    check(
+        "意图-步骤命中",
+        inst._should_skip_user_intent("配置步骤是什么") != "",
+    )
+    check(
+        "意图-闲聊不命中",
+        inst._should_skip_user_intent("你今天怎么样") == "",
+        inst._should_skip_user_intent("你今天怎么样"),
+    )
+    check("意图-空消息不命中", inst._should_skip_user_intent("") == "")
+    inst.config["tts_skip_user_intent_patterns"] = [r"^问："]
+    check("意图-自定义命中", inst._should_skip_user_intent("问：怎么退款") != "")
+    check("意图-自定义不误伤", inst._should_skip_user_intent("今天吃什么") == "")
+    inst.config.pop("tts_skip_user_intent_patterns", None)
+    check(
+        "TTS 钩子接入用户意图",
+        "_should_skip_user_intent" in inspect.getsource(inst.tts_hook),
+    )
 
     print("\n[35] 绑定导出导入")
     DISABLED = module.DISABLED_ENGINE

@@ -55,6 +55,12 @@ _SENSITIVE_FIELD_RE = re.compile(
 
 DISABLED_ENGINE = "__disabled__"
 
+# 用户消息命中这些信息型提问特征时，优先返回文本而不是语音。
+# 注意：这里匹配的是用户消息（event.message_str），不是机器人回复。
+DEFAULT_USER_INTENT_PATTERNS = [
+    r"(?:请问|介绍一下|解释一下|说明一下|什么是|是什么|是谁|叫什么|名字|名称|全称|简称|别名|英文名|中文名|又名|定义|含义|意思|列出|列举|对比|区别|步骤|教程|攻略|资料|来源|引用|查询|搜索|总结|概括|翻译|价格|多少钱|地址|电话|邮箱|网址|链接|怎么做|怎么用|怎么办|如何做|如何用|如何设置|如何评价|如何选择|在哪里|在哪儿|为什么|为啥)"
+]
+
 # ---------------------------------------------------------------------------
 # WebUI 试听 / 样本管理
 # ---------------------------------------------------------------------------
@@ -842,6 +848,16 @@ class UniversalTTSPlugin(Star):
         if len(full_text) < 1:
             return
 
+        # 用户意图跳过：介绍/解释/名称/步骤/价格等知识型提问优先返回文本。
+        user_text = str(getattr(event, "message_str", "") or "").strip()
+        user_skip_reason = self._should_skip_user_intent(user_text)
+        if user_skip_reason:
+            logger.debug(
+                f"[UniversalTTS] 命中用户意图跳过规则 ({user_skip_reason})，跳过 TTS"
+            )
+            self._suppress_core_tts(result)
+            return
+
         # 字数上限检查
         if self.config.get("tts_text_limit_enable", False):
             limit = self.config.get("tts_text_limit", 50)
@@ -1087,6 +1103,30 @@ class UniversalTTSPlugin(Star):
                 if pattern not in self._warned_skip_patterns:
                     self._warned_skip_patterns.add(pattern)
                     logger.warning(f"[UniversalTTS] 跳过规则不是有效正则，已忽略: {pattern} ({e})")
+        return ""
+
+    def _should_skip_user_intent(self, text: str) -> str:
+        """用户消息命中信息型提问规则时跳过 TTS，返回跳过原因。"""
+        if not text:
+            return ""
+        patterns = self.config.get("tts_skip_user_intent_patterns")
+        if patterns is None:
+            patterns = DEFAULT_USER_INTENT_PATTERNS
+        if not isinstance(patterns, (list, tuple)):
+            return ""
+        for raw in patterns:
+            pattern = str(raw).strip()
+            if not pattern:
+                continue
+            try:
+                if re.search(pattern, text):
+                    return f"user_intent:{pattern}"
+            except re.error as e:
+                if pattern not in self._warned_skip_patterns:
+                    self._warned_skip_patterns.add(pattern)
+                    logger.warning(
+                        f"[UniversalTTS] 用户意图规则不是有效正则，已忽略: {pattern} ({e})"
+                    )
         return ""
 
     def _session_tts_status(self, session_id: str) -> str:
