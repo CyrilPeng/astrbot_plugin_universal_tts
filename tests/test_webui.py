@@ -307,7 +307,7 @@ def main():
     inst = cls(ctx, cfg)
 
     print("\n[1] Web API 注册")
-    check("注册 23 条路由", len(ctx.routes) == 23, f"实际 {len(ctx.routes)}")
+    check("注册 24 条路由", len(ctx.routes) == 24, f"实际 {len(ctx.routes)}")
     check(
         "路由均带插件名前缀",
         all(r.startswith(f"/{PKG}/") for r in ctx.routes),
@@ -315,6 +315,7 @@ def main():
     )
     for ep in [
         "engines/test",
+        "engines/voices",
         "samples",
         "samples/upload",
         "samples/delete",
@@ -1475,6 +1476,35 @@ def main():
     check("重试使用新 voice id", spoken2[-1]["voice"] == "voice-2", str(spoken2[-1]))
     asyncio.run(retry_clone.close())
 
+    # 读取服务端已有音色
+    list_engine = Clone({"api_key": "k"})
+
+    def _voices_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/audio/voices"):
+            return httpx.Response(
+                200,
+                json={
+                    "voices": [
+                        {"id": "voice-a", "name": "Me", "duration_s": 3.2},
+                        {"id": "voice-b", "name": "Other"},
+                        {"name": "missing-id"},
+                    ]
+                },
+            )
+        return httpx.Response(404)
+
+    list_engine._client = httpx.AsyncClient(transport=httpx.MockTransport(_voices_handler))
+
+    async def _run_list_voices():
+        result = await list_engine.list_voices()
+        await list_engine.close()
+        return result
+
+    listed = asyncio.run(_run_list_voices())
+    check("音色列表解析", [v["id"] for v in listed] == ["voice-a", "voice-b"], str(listed))
+    check("音色列表保留名称", listed[0]["name"] == "Me", str(listed[0]))
+    check("音色列表跳过缺 id 项", len(listed) == 2, str(listed))
+
     def _prefix(style="", singing=False, text="月亮代表我的心"):
         e = V25({"api_key": "k", "style": style, "singing_mode": singing})
         payload = e._build_payload(text)
@@ -1507,6 +1537,41 @@ def main():
           payload["messages"][0] == {"role": "user", "content": "用温柔的语气"})
     check("audio 结构正确", payload["audio"] == {"format": "wav", "voice": "mimo_default"})
     check("模型默认 v2.5", payload["model"] == "mimo-v2.5-tts")
+
+    print("\n[39] 读取已有音色接口")
+
+    class _VoiceEngine:
+        async def list_voices(self):
+            return [{"id": "voice-a", "name": "Me"}]
+
+        async def close(self):
+            pass
+
+    class _NoVoiceEngine:
+        async def close(self):
+            pass
+
+    original_get_engine = module.get_engine
+    module.get_engine = lambda cfg, conf=None: _VoiceEngine()
+    web.request.payload = {
+        "engine": {
+            "__template_key": "openai_clone",
+            "api_key": "k",
+            "api_base": "http://127.0.0.1:8888/v1",
+        }
+    }
+    res = asyncio.run(inst.web_list_engine_voices())
+    check("读取音色成功", res.get("__ok__") is True, str(res)[:160])
+    check(
+        "返回音色列表",
+        (res.get("data") or {}).get("voices") == [{"id": "voice-a", "name": "Me"}],
+        str(res)[:160],
+    )
+
+    module.get_engine = lambda cfg, conf=None: _NoVoiceEngine()
+    res = asyncio.run(inst.web_list_engine_voices())
+    check("不支持时返回错误", res.get("__ok__") is False, str(res)[:160])
+    module.get_engine = original_get_engine
 
     print()
     if failures:

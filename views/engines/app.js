@@ -572,6 +572,9 @@ function renderField(key, spec, value, secretIsSet) {
   if (key === "voice_sample_name") {
     return renderSampleField(key, spec, value);
   }
+  if (key === "voice_id") {
+    return renderVoiceField(key, spec, value);
+  }
 
   const wrap = document.createElement("label");
   wrap.className = "field";
@@ -627,6 +630,84 @@ function renderField(key, spec, value, secretIsSet) {
     hint.textContent = String(spec.hint);
     wrap.appendChild(hint);
   }
+
+  return wrap;
+}
+
+/** 已有音色字段：手动填写 + 从服务端读取后选择。
+ *  服务端路由是 engines/voices；只有实现了 list_voices 的引擎返回列表。
+ */
+function renderVoiceField(key, spec, value) {
+  const wrap = document.createElement("div");
+  wrap.className = "field";
+
+  const label = document.createElement("span");
+  label.className = "field-label";
+  label.textContent = spec.description || key;
+  wrap.appendChild(label);
+
+  const row = document.createElement("div");
+  row.className = "sample-row";
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.name = key;
+  input.value = value === undefined || value === null ? "" : String(value);
+  row.appendChild(input);
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "btn btn-secondary";
+  button.textContent = t("voice_fetch", "读取已有音色");
+  row.appendChild(button);
+  wrap.appendChild(row);
+
+  const picker = document.createElement("select");
+  picker.className = "voice-picker";
+  picker.hidden = true;
+  wrap.appendChild(picker);
+
+  if (spec.hint) {
+    const hint = document.createElement("span");
+    hint.className = "field-hint";
+    hint.textContent = String(spec.hint);
+    wrap.appendChild(hint);
+  }
+
+  button.addEventListener("click", async () => {
+    const payload = { engine: collectDraft() };
+    if (editing && editing.index !== null) payload.index = editing.index;
+    button.disabled = true;
+    const original = button.textContent;
+    button.textContent = t("voice_fetching", "读取中…");
+    try {
+      const data = await bridge.apiPost("engines/voices", withToken(payload));
+      const voices = Array.isArray(data.voices) ? data.voices : [];
+      picker.innerHTML = "";
+      const empty = document.createElement("option");
+      empty.value = "";
+      empty.textContent = voices.length
+        ? t("voice_pick", "选择要使用的音色")
+        : t("voice_empty", "服务端没有已保存的音色");
+      picker.appendChild(empty);
+      voices.forEach((voice) => {
+        const option = document.createElement("option");
+        option.value = String(voice.id || "");
+        const name = String(voice.name || "");
+        option.textContent = name ? `${name} (${voice.id})` : String(voice.id || "");
+        picker.appendChild(option);
+      });
+      picker.hidden = voices.length === 0;
+      picker.onchange = () => {
+        if (picker.value) input.value = picker.value;
+      };
+    } catch (error) {
+      await reportError(error, "inline");
+    } finally {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  });
 
   return wrap;
 }

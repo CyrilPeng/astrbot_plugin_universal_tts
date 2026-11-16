@@ -1486,6 +1486,7 @@ class UniversalTTSPlugin(Star):
             (f"{prefix}/engines/activate", self.web_activate_engine, ["POST"], "设置默认引擎"),
             (f"{prefix}/engines/test", self.web_test_engine, ["POST"], "提交试听任务"),
             (f"{prefix}/engines/test/result", self.web_test_result, ["GET"], "查询试听结果"),
+            (f"{prefix}/engines/voices", self.web_list_engine_voices, ["POST"], "读取引擎已有音色"),
             (f"{prefix}/samples", self.web_list_samples, ["GET"], "列出音色样本文件"),
             (f"{prefix}/samples/upload", self.web_upload_sample, ["POST"], "上传音色样本文件"),
             (f"{prefix}/samples/download", self.web_download_sample, ["GET"], "下载音色样本文件"),
@@ -1915,6 +1916,60 @@ class UniversalTTSPlugin(Star):
             if key in job:
                 result[key] = job[key]
         return json_response(result)
+
+    async def web_list_engine_voices(self):
+        """读取引擎服务端已保存的音色（目前仅 OpenAI 克隆引擎支持）。
+
+        与试听接口一样，既支持已保存的 ``index``，也支持编辑器里的草稿
+        ``engine``，这样用户还没保存引擎时就能先读取服务端音色。
+        """
+        payload = await request.json(default={}) or {}
+        raw_engines = self._list_engines()
+        try:
+            index = (
+                self._as_index(payload.get("index"), len(raw_engines))
+                if payload.get("index") is not None
+                else None
+            )
+        except ValueError as e:
+            return error_response(str(e))
+
+        existing = dict(raw_engines[index]) if index is not None else None
+        draft = payload.get("engine")
+        if isinstance(draft, dict):
+            template_key = str(
+                draft.get("__template_key")
+                or (existing or {}).get("__template_key")
+                or ""
+            ).strip()
+            if not template_key:
+                return error_response("缺少引擎类型 __template_key")
+            try:
+                engine_config = self._normalize_engine(template_key, draft, existing)
+            except ValueError as e:
+                return error_response(str(e))
+        elif existing is not None:
+            engine_config = existing
+        else:
+            return error_response("需要提供 index 或 engine 参数")
+
+        engine = None
+        try:
+            engine = get_engine(engine_config, self.config)
+            list_voices = getattr(engine, "list_voices", None)
+            if not callable(list_voices):
+                return error_response("当前引擎不支持读取已有音色")
+            voices = await list_voices()
+            return json_response({"voices": voices})
+        except Exception as e:
+            logger.warning(f"[UniversalTTS] 读取已有音色失败: {e}")
+            return error_response(f"{type(e).__name__}: {e}")
+        finally:
+            if engine is not None:
+                try:
+                    await engine.close()
+                except Exception:
+                    pass
 
     def _prune_preview_jobs(self) -> None:
         """清掉过期任务，并保证任务表不会无限增长。"""

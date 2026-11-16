@@ -245,6 +245,41 @@ class OpenAICloneEngine(TTSEngine):
             )
             return voice_id
 
+    async def list_voices(self) -> list[dict]:
+        """读取服务端已保存的音色列表：GET {api_base}/audio/voices。"""
+        response = await self._get_client().get(
+            f"{self.api_base}/audio/voices", headers=self._headers()
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"OpenAI 克隆 TTS 读取音色列表错误 [{response.status_code}]: "
+                f"{self._response_detail(response)}"
+            )
+        data = self._json_or_raise(response, "读取音色列表")
+        raw = data.get("voices")
+        if raw is None and isinstance(data.get("data"), list):
+            raw = data.get("data")
+        if not isinstance(raw, list):
+            raise RuntimeError(
+                f"OpenAI 克隆 TTS: 音色列表格式异常: {data!r}"[:300]
+            )
+        voices: list[dict] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            voice_id = str(item.get("id") or "").strip()
+            if not voice_id:
+                continue
+            voices.append(
+                {
+                    "id": voice_id,
+                    "name": str(item.get("name") or "").strip(),
+                    "duration_s": item.get("duration_s"),
+                    "language": item.get("language"),
+                }
+            )
+        return voices
+
     async def _recreate_voice(self) -> None:
         """丢弃内存与磁盘缓存，下一次 _ensure_voice 会重新创建。"""
         async with self._voice_lock:

@@ -26,6 +26,7 @@ POST {api_base}/audio/speech                 {"model", "voice", "input", "respon
 - **音色缓存落盘**：缓存写在 `data/plugin_data/astrbot_plugin_universal_tts/openai_clone_voices.json`，重启后优先复用；样本内容、音色名或服务地址变化时自动重新创建
 - **失效自愈**：服务端重启或删除音色后，合成返回音色相关错误时会自动重新上传样本并重建一次
 - **可跳过自动注册**：已有保存音色时，直接填 `voice_id` 即可，不再上传样本
+- **可查看服务端音色**：编辑页的 `voice_id` 旁有「读取已有音色」按钮，会调用 `GET /audio/voices` 列出服务端已保存的音色，选中后自动填入 `voice_id`
 - **可留空模型**：`model` 留空时使用服务端当前加载的模型
 
 ### 使用步骤
@@ -40,7 +41,7 @@ POST {api_base}/audio/speech                 {"model", "voice", "input", "respon
    | `model` | 模型名；留空则用服务端当前加载的模型 |
    | `voice_name` | 首次创建保存音色时使用的名称 |
    | `transcript` | 样本音频里说的原话；部分模型克隆时需要，可留空 |
-   | `voice_id` | 已有音色 ID；填写后跳过上传与创建 |
+   | `voice_id` | 已有音色 ID；填写后跳过上传与创建，也可点「读取已有音色」从服务端列表选择 |
    | `voice_sample_name` | 指定使用哪个已上传样本；留空用第一个 |
    | `format` | 输出格式，默认 `mp3` |
    | `speed` | 语速；1.0 表示不发送该参数 |
