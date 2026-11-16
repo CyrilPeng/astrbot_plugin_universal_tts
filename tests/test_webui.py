@@ -1368,6 +1368,17 @@ def main():
     )
     clone_speed = Clone({"api_key": "k", "speed": 1.2, "format": "wav"})
     check("非默认语速才发送", clone_speed._build_speech_payload("x", "v").get("speed") == 1.2)
+    check(
+        "空模型不发送",
+        "model" not in Clone({"api_key": "k"})._build_speech_payload("x", "v"),
+    )
+    check(
+        "填写的模型原样发送",
+        Clone({"api_key": "k", "model": "  my-model  "})
+        ._build_speech_payload("x", "v")
+        .get("model")
+        == "my-model",
+    )
     check("auto 语言不发送", "language" not in clone._build_speech_payload("x", "v"))
     clone_lang = Clone({"api_key": "k", "language": "Japanese"})
     check(

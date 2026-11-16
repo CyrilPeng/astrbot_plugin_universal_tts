@@ -30,7 +30,7 @@ POST {api_base}/audio/speech                 {"model", "voice", "input", "respon
 - **可查看服务端音色**：`voice_id` 是下拉框，打开编辑器时自动调用 `GET /audio/voices` 加载服务端已保存的音色并按名称展示；留空表示自动创建，旁边的「读取已有音色」可手动刷新
 - **生成语言可选**：`language` 默认 `auto`，不发送语言提示；选择 `Chinese`、`Japanese` 等后会作为 `language` 参数发送给支持该提示的模型
 - **可固定随机种子**：`seed` 留空时不发送；填写整数会作为 `seed` 参数传入（best-effort 确定性，不保证完全复现）
-- **可留空模型**：`model` 留空时使用服务端当前加载的模型
+- **模型名可选**：`model` 留空时请求体不发送该字段，由服务端使用当前加载的模型；填写后原样传入你填写的模型名
 
 ### 使用步骤
 
@@ -41,7 +41,7 @@ POST {api_base}/audio/speech                 {"model", "voice", "input", "respon
    |---|---|
    | `api_key` | 服务端 API Key |
    | `api_base` | 填到 `/v1` 为止，例如 `http://127.0.0.1:8888/v1` |
-   | `model` | 模型名；留空则用服务端当前加载的模型 |
+   | `model` | 模型名；留空不发送，填写后原样传入（如 `audio-cpp/audio.cpp-gguf/CosyVoice3-GGUF`） |
    | `transcript` | 样本音频里说的原话；部分模型克隆时需要，可留空 |
    | `language` | 生成文本语言，默认 `auto`（不发送提示）；可选 Chinese / English / Japanese 等 |
    | `voice_id` | 下拉选择服务端已保存的音色；留空则用样本自动创建 |

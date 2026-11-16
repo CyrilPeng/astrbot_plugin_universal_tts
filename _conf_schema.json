@@ -347,10 +347,10 @@
             "hint": "填到 /v1 为止，不要带 /audio/speech"
           },
           "model": {
-            "description": "模型名称",
+            "description": "模型名称（可选）",
             "type": "string",
             "default": "",
-            "hint": "留空则使用服务端当前加载的模型；例如 audio-cpp/audio.cpp-gguf/CosyVoice3-GGUF"
+            "hint": "留空则不发送 model，由服务端使用当前加载的模型；填写后原样传入该模型名"
           },
           "transcript": {
             "description": "样本转写文本",
