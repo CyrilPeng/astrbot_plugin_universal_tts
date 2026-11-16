@@ -311,6 +311,35 @@ body {
   padding: 14px 16px;
 }
 
+.progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 16px 0;
+}
+
+.progress-head {
+  color: var(--text-muted);
+  display: flex;
+  font-size: 11px;
+  justify-content: space-between;
+}
+
+.progress-track {
+  background: var(--surface-2);
+  border-radius: 999px;
+  height: 8px;
+  overflow: hidden;
+}
+
+.progress-bar {
+  background: var(--primary);
+  border-radius: 999px;
+  height: 100%;
+  transition: width 0.25s ease;
+  width: 0;
+}
+
 .editor-foot {
   border-top: 1px solid var(--border);
   display: flex;

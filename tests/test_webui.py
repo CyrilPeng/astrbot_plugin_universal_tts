@@ -307,7 +307,7 @@ def main():
     inst = cls(ctx, cfg)
 
     print("\n[1] Web API 注册")
-    check("注册 24 条路由", len(ctx.routes) == 24, f"实际 {len(ctx.routes)}")
+    check("注册 25 条路由", len(ctx.routes) == 25, f"实际 {len(ctx.routes)}")
     check(
         "路由均带插件名前缀",
         all(r.startswith(f"/{PKG}/") for r in ctx.routes),
@@ -315,6 +315,7 @@ def main():
     )
     for ep in [
         "engines/test",
+        "engines/save/result",
         "engines/voices",
         "samples",
         "samples/upload",
@@ -1494,7 +1495,10 @@ def main():
     )
     clone._client = httpx.AsyncClient(transport=httpx.MockTransport(_clone_handler))
 
+    progress_stages = []
+
     async def _run_clone():
+        await clone.prepare_voice(progress_stages.append)
         first = await clone.synthesize("你好")
         second = await clone.synthesize("第二句")
         await clone.close()
@@ -1523,6 +1527,11 @@ def main():
             "reference_text": "样本原话",
         },
         str(spoken[0]),
+    )
+    check(
+        "预注册上报进度",
+        "uploading" in progress_stages and "creating" in progress_stages,
+        str(progress_stages),
     )
     check("第二次合成复用音色", (len(uploaded), len(created)) == (1, 1), f"{len(uploaded)},{len(created)}")
     check("第二次合成不再重复创建", spoken[1]["voice"] == "voice-1")
@@ -1668,6 +1677,87 @@ def main():
     res = asyncio.run(inst.web_list_engine_voices())
     check("不支持时返回错误", res.get("__ok__") is False, str(res)[:160])
     module.get_engine = original_get_engine
+
+    print("\n[40] 保存时预注册音色与进度")
+
+    class _ProgressEngine:
+        def __init__(self, cfg, conf=None):
+            self.instance_name = str(cfg.get("instance_name") or "")
+
+        async def prepare_voice(self, progress=None):
+            if progress:
+                progress("uploading")
+                progress("creating")
+                progress("done")
+            return "voice-pre"
+
+        async def close(self):
+            pass
+
+    original_get_engine = module.get_engine
+    module.get_engine = lambda cfg, conf=None: _ProgressEngine(cfg, conf)
+
+    async def _run_save(name):
+        web.request.payload = {
+            "engine": {
+                "__template_key": "openai_clone",
+                "instance_name": name,
+                "api_key": "k",
+                "api_base": "http://127.0.0.1:8888/v1",
+            }
+        }
+        started = await inst.web_save_engine()
+        if not started.get("__ok__"):
+            return started
+        job_id = (started.get("data") or {}).get("job_id")
+        if not job_id:
+            return {"__ok__": False, "error": "没有返回 job_id"}
+        last = None
+        for _ in range(300):
+            web.request.query = {"job_id": job_id}
+            last = await inst.web_save_result()
+            status = (last.get("data") or {}).get("status")
+            if status not in ("pending", "running"):
+                return last
+            await asyncio.sleep(0.01)
+        return last or {"__ok__": False, "error": "超时"}
+
+    res = asyncio.run(_run_save("预注册测试"))
+    data = res.get("data") or {}
+    check("保存任务完成", data.get("status") == "done", str(res)[:200])
+    check("保存进度到 100", data.get("progress") == 100, str(data.get("progress")))
+    payload = data.get("data") or {}
+    check(
+        "预注册后引擎已保存",
+        any(
+            e.get("instance_name") == "预注册测试"
+            for e in payload.get("engines", [])
+        ),
+        str(payload.get("engines"))[:200],
+    )
+
+    class _FailEngine(_ProgressEngine):
+        async def prepare_voice(self, progress=None):
+            raise RuntimeError("upload failed")
+
+    module.get_engine = lambda cfg, conf=None: _FailEngine(cfg, conf)
+    res = asyncio.run(_run_save("预注册失败测试"))
+    data = res.get("data") or {}
+    check("预注册失败任务报错", data.get("status") == "error", str(res)[:200])
+    check(
+        "失败原因可见",
+        "upload failed" in (data.get("error") or ""),
+        str(data.get("error")),
+    )
+    check(
+        "失败时不保存引擎",
+        not any(
+            e.get("instance_name") == "预注册失败测试"
+            for e in inst.config.get("engines", [])
+        ),
+    )
+    module.get_engine = original_get_engine
+    web.request.query = {}
 
     print()
     if failures:

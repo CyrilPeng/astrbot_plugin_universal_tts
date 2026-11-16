@@ -65,9 +65,17 @@ PREVIEW_TEXT = "你好，这是一段音色试听。"
 PREVIEW_MAX_BYTES = 4 * 1024 * 1024
 # 单次试听的硬超时：超时即判失败，避免请求无限挂起被网关掐断
 PREVIEW_TIMEOUT = 60
-# 试听任务结果的保留时长与数量上限
+# 试听 / 保存任务结果的保留时长与数量上限
 PREVIEW_JOB_TTL = 300
 PREVIEW_MAX_JOBS = 20
+# 保存引擎时预注册音色的阶段进度
+_SAVE_STAGE_PROGRESS = {
+    "checking": (5, "检查配置"),
+    "uploading": (35, "上传音色样本"),
+    "creating": (75, "创建保存音色"),
+    "done": (90, "音色已创建"),
+    "cached": (90, "使用已保存音色"),
+}
 # 单个样本文件上限
 SAMPLE_MAX_BYTES = 20 * 1024 * 1024
 # 允许的样本扩展名（与 _conf_schema.json 的 file_types 保持一致）
@@ -340,6 +348,7 @@ class UniversalTTSPlugin(Star):
         self._templates_cache: dict | None = None
         self._schema_cache: dict | None = None
         self._preview_jobs: dict[str, dict] = {}
+        self._save_jobs: dict[str, dict] = {}
         self._register_web_apis()
 
     def _load_bindings(self):
@@ -1481,6 +1490,7 @@ class UniversalTTSPlugin(Star):
         apis = (
             (f"{prefix}/engines", self.web_list_engines, ["GET"], "列出 TTS 引擎实例"),
             (f"{prefix}/engines/save", self.web_save_engine, ["POST"], "新增或更新引擎实例"),
+            (f"{prefix}/engines/save/result", self.web_save_result, ["GET"], "查询保存进度"),
             (f"{prefix}/engines/clone", self.web_clone_engine, ["POST"], "复制引擎实例"),
             (f"{prefix}/engines/delete", self.web_delete_engine, ["POST"], "删除引擎实例"),
             (f"{prefix}/engines/activate", self.web_activate_engine, ["POST"], "设置默认引擎"),
@@ -1745,6 +1755,42 @@ class UniversalTTSPlugin(Star):
                 return error_response(f"实例名称已存在: {name}")
         normalized["instance_name"] = name
 
+        # OpenAI 克隆引擎在保存时就完成样本上传和音色创建，避免首次合成才注册。
+        # 前端通过 job 轮询进度条；选择已有 voice_id 时无需预注册，直接同步保存。
+        if template_key == "openai_clone" and not str(
+            normalized.get("voice_id") or ""
+        ).strip():
+            self._prune_save_jobs()
+            job_id = uuid.uuid4().hex
+            self._save_jobs[job_id] = {
+                "status": "pending",
+                "progress": 0,
+                "label": "准备中…",
+                "created": time.time(),
+            }
+            asyncio.create_task(
+                self._run_save_job(
+                    job_id,
+                    engines,
+                    normalized,
+                    index,
+                    existing,
+                    name,
+                    template_key,
+                )
+            )
+            logger.debug(f"[UniversalTTS] 保存引擎任务已提交: {job_id}")
+            return json_response({"job_id": job_id})
+
+        data = await self._commit_engine_save(
+            engines, normalized, index, existing, name, template_key
+        )
+        return json_response(data)
+
+    async def _commit_engine_save(
+        self, engines, normalized, index, existing, name, template_key
+    ) -> dict:
+        """把归一化后的引擎写入列表、持久化并返回最新 WebUI payload。"""
         if index is None:
             engines.append(normalized)
         else:
@@ -1763,7 +1809,83 @@ class UniversalTTSPlugin(Star):
             "engines.save",
             f"{'更新' if existing is not None else '新建'}引擎「{name}」({template_key})",
         )
-        return json_response(self._build_engines_payload())
+        return self._build_engines_payload()
+
+    async def _run_save_job(
+        self, job_id, engines, normalized, index, existing, name, template_key
+    ) -> None:
+        """后台预注册音色，完成后落盘；进度写入 job 供前端轮询。"""
+        job = self._save_jobs.get(job_id)
+        if job is None:
+            return
+        engine = None
+
+        def report(stage: str) -> None:
+            percent, label = _SAVE_STAGE_PROGRESS.get(
+                stage, (int(job.get("progress", 0)), str(job.get("label") or ""))
+            )
+            job.update(progress=percent, label=label, updated=time.time())
+
+        try:
+            job.update(status="running", progress=5, label="检查配置")
+            engine = get_engine(normalized, self.config)
+            prepare = getattr(engine, "prepare_voice", None)
+            if callable(prepare):
+                await prepare(report)
+            else:
+                report("cached")
+            job.update(progress=95, label="保存配置", updated=time.time())
+            data = await self._commit_engine_save(
+                engines, normalized, index, existing, name, template_key
+            )
+            job.update(status="done", progress=100, label="完成", data=data)
+        except Exception as e:
+            logger.warning(f"[UniversalTTS] 保存引擎时预注册音色失败: {e}")
+            job.update(
+                status="error",
+                error=f"{type(e).__name__}: {e}",
+                label="失败",
+                updated=time.time(),
+            )
+        finally:
+            if engine is not None:
+                try:
+                    await engine.close()
+                except Exception:
+                    pass
+
+    async def web_save_result(self):
+        """轮询保存任务的状态与进度。"""
+        job_id = str(request.query.get("job_id", "") or "").strip()
+        if not job_id:
+            return error_response("缺少 job_id 参数")
+        job = self._save_jobs.get(job_id)
+        if job is None:
+            return error_response("保存任务不存在或已过期，请重试")
+        result = {
+            "status": job.get("status", "pending"),
+            "progress": int(job.get("progress", 0)),
+            "label": job.get("label", ""),
+        }
+        for key in ("error", "data"):
+            if key in job:
+                result[key] = job[key]
+        return json_response(result)
+
+    def _prune_save_jobs(self) -> None:
+        """清理过期保存任务，避免内存无限增长。"""
+        now = time.time()
+        for key in [
+            k
+            for k, v in self._save_jobs.items()
+            if now - v.get("created", now) > PREVIEW_JOB_TTL
+        ]:
+            self._save_jobs.pop(key, None)
+        while len(self._save_jobs) >= PREVIEW_MAX_JOBS:
+            oldest = min(
+                self._save_jobs, key=lambda k: self._save_jobs[k].get("created", 0)
+            )
+            self._save_jobs.pop(oldest, None)
 
     async def web_clone_engine(self):
         payload = await request.json(default={})

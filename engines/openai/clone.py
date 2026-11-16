@@ -255,15 +255,30 @@ class OpenAICloneEngine(TTSEngine):
             )
         return voice_id
 
-    async def _ensure_voice(self) -> str:
+    async def prepare_voice(self, progress=None) -> str:
+        """预先完成音色注册，返回 voice id。
+
+        保存引擎时调用，避免首次合成才上传样本；``progress(stage)``
+        用于把 uploading / creating / done 等阶段推给前端进度条。
+        """
+        return await self._ensure_voice(progress)
+
+    async def _ensure_voice(self, progress=None) -> str:
         """返回可用的 voice id：配置指定 → 本地缓存 → 上传样本并创建。"""
+        def report(stage: str) -> None:
+            if progress:
+                progress(stage)
+
         if self._voice_id:
+            report("cached")
             return self._voice_id
 
         async with self._voice_lock:
             if self._voice_id:
+                report("cached")
                 return self._voice_id
 
+            report("checking")
             sample_path, sample_bytes = self._read_sample()
             key = self._cache_key_for(sample_bytes)
             self._cache_key = key
@@ -272,14 +287,18 @@ class OpenAICloneEngine(TTSEngine):
             if isinstance(entry, dict) and str(entry.get("voice_id") or "").strip():
                 self._voice_id = str(entry["voice_id"]).strip()
                 logger.info("[UniversalTTS] OpenAI 克隆: 复用已保存音色")
+                report("cached")
                 return self._voice_id
 
+            report("uploading")
             input_id = await self._upload_input(sample_path, sample_bytes)
+            report("creating")
             voice_id = await self._create_voice(
                 input_id, self._voice_display_name(sample_path)
             )
             self._voice_id = voice_id
             self._save_cache_entry(key, voice_id, input_id)
+            report("done")
             logger.info(
                 f"[UniversalTTS] OpenAI 克隆: 已从样本 '{sample_path.name}' 创建音色"
             )

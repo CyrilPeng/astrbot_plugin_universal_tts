@@ -8,6 +8,7 @@
 
 - **`openai_clone` 引擎**：`POST /audio/inputs` 上传样本 → `POST /audio/voices` 创建保存音色 → `POST /audio/speech` 合成
   - 首次合成自动完成注册，之后复用 `voice_id`
+  - 保存引擎时预注册音色：编辑页保存即上传样本并创建保存音色，对话框显示上传/创建进度条，首次合成无需等待
   - 缓存落盘到 `data/plugin_data/astrbot_plugin_universal_tts/openai_clone_voices.json`，重启后优先复用；样本或服务地址变化时自动重建
   - 保存音色名称默认取样本文件名（如 `me.wav` → `me`），移除 `voice_name` 配置项
   - 新增 `language` 选项，默认 `auto`（不发送语言提示）；选择具体语言后作为 `language` 参数发送给支持该提示的模型
@@ -28,7 +29,7 @@
 
 ### 说明
 
-- 测试 319 -> 370 项（新增克隆引擎模板、参数校验、完整 `inputs → voices → speech` 流程、缓存复用与失效重建、读取已有音色接口、音色名取样本文件名、生成语言参数、随机种子、模型名可选发送、四种克隆模式）
+- 测试 319 -> 378 项（新增克隆引擎模板、参数校验、完整 `inputs → voices → speech` 流程、缓存复用与失效重建、读取已有音色接口、音色名取样本文件名、生成语言参数、随机种子、模型名可选发送、四种克隆模式、保存时预注册与进度条）
 - 测试依赖 `httpx`（MockTransport 参与真实引擎类测试）
 
 ## v1.4.5

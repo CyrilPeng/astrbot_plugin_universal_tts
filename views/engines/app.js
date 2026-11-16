@@ -1078,6 +1078,56 @@ async function deleteEngine(index) {
   }
 }
 
+function setSaveProgress(percent, label) {
+  const value = Math.max(0, Math.min(100, Number(percent) || 0));
+  els.saveProgress.hidden = false;
+  els.saveProgressBar.style.width = value + "%";
+  els.saveProgressPercent.textContent = value + "%";
+  if (label) els.saveProgressLabel.textContent = label;
+}
+
+function hideSaveProgress() {
+  els.saveProgress.hidden = true;
+  els.saveProgressBar.style.width = "0%";
+  els.saveProgressPercent.textContent = "0%";
+  els.saveProgressLabel.textContent = "";
+}
+
+async function waitForSaveJob(jobId) {
+  const deadline = Date.now() + 180000;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    await sleep(400);
+    let data = null;
+    try {
+      data = await bridge.apiGet("engines/save/result", { job_id: jobId });
+    } catch (error) {
+      const message = error && error.message ? error.message : String(error);
+      const lowered = message.toLowerCase();
+      // 任务已过期/不存在时立即失败，避免无意义地轮询到超时。
+      if (
+        message.includes("不存在或已过期") ||
+        lowered.includes("not found") ||
+        lowered.includes("expired")
+      ) {
+        throw error;
+      }
+      // 单次轮询抖动不直接判失败，继续重试
+      lastError = error;
+      continue;
+    }
+    lastError = null;
+    if (!data) continue;
+    setSaveProgress(data.progress, data.label);
+    if (data.status === "done") return data;
+    if (data.status === "error") {
+      throw new Error(data.error || t("save_failed", "保存失败"));
+    }
+  }
+  if (lastError) throw lastError;
+  throw new Error(t("save_timeout", "保存超时，请重试"));
+}
+
 async function saveEditor() {
   if (!editing) return;
   const engine = collectDraft();
@@ -1092,16 +1142,35 @@ async function saveEditor() {
   if (editing.index !== null) payload.index = editing.index;
 
   setEditorError("");
+  setBanner("");
+  const originalSaveText = els.btnSave.textContent;
   els.btnSave.disabled = true;
+  els.btnCancel.disabled = true;
+  els.btnClose.disabled = true;
+  // OpenAI 克隆引擎保存时会上传样本并创建音色，先显示准备阶段。
+  if (editing.templateKey === "openai_clone") {
+    els.btnSave.textContent = t("saving", "保存中…");
+    setSaveProgress(5, t("save_preparing", "准备中…"));
+  }
   try {
     const data = await bridge.apiPost("engines/save", withToken(payload));
-    applyPayload(data);
+    if (data && data.job_id) {
+      const result = await waitForSaveJob(data.job_id);
+      applyPayload(result.data);
+    } else {
+      applyPayload(data);
+    }
+    hideSaveProgress();
     els.editor.close();
     setBanner(t("saved", "已保存"), "ok");
   } catch (error) {
+    hideSaveProgress();
     await reportError(error, "inline");
   } finally {
     els.btnSave.disabled = false;
+    els.btnCancel.disabled = false;
+    els.btnClose.disabled = false;
+    els.btnSave.textContent = originalSaveText;
   }
 }
 
@@ -2204,6 +2273,10 @@ async function main() {
     templateField: byId("template-field"),
     templateSelect: byId("template-select"),
     fields: byId("fields"),
+    saveProgress: byId("save-progress"),
+    saveProgressLabel: byId("save-progress-label"),
+    saveProgressPercent: byId("save-progress-percent"),
+    saveProgressBar: byId("save-progress-bar"),
     btnNew: byId("btn-new"),
     btnSave: byId("btn-save"),
     btnCancel: byId("btn-cancel"),
