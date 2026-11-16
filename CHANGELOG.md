@@ -13,6 +13,10 @@
   - 新增 `language` 选项，默认 `auto`（不发送语言提示）；选择具体语言后作为 `language` 参数发送给支持该提示的模型
   - 新增 `seed` 选项，留空不发送；填写整数时作为 `seed` 参数传入，用于 best-effort 确定性生成
   - `model` 保持可选：留空时请求体不发送该字段，由服务端使用当前加载的模型；填写后原样传入填写的模型名
+  - 新增克隆模式 `mode`：Same language / Cross-lingual / Instruct
+    - Cross-lingual 隐藏样本转写，发送空 `reference_text` 并带 `audio_options.template_name = cross_lingual`
+    - Instruct 显示 Instruction 文本框，发送 `template_name = instruct` 和 `instructions`
+    - Same language 保持原有行为，发送转写但不带 `template_name`
   - 合成返回音色相关错误（服务端重启/音色被删除）时自动重新上传并创建一次
   - 支持直接填写已有 `voice_id` 跳过上传；`model` 留空时使用服务端当前加载的模型
   - WebUI 的 `voice_id` 改为下拉框，自动调用 `GET /audio/voices` 加载服务端音色并按名称展示；留空表示自动创建
@@ -23,7 +27,7 @@
 
 ### 说明
 
-- 测试 319 -> 359 项（新增克隆引擎模板、参数校验、完整 `inputs → voices → speech` 流程、缓存复用与失效重建、读取已有音色接口、音色名取样本文件名、生成语言参数、随机种子、模型名可选发送）
+- 测试 319 -> 367 项（新增克隆引擎模板、参数校验、完整 `inputs → voices → speech` 流程、缓存复用与失效重建、读取已有音色接口、音色名取样本文件名、生成语言参数、随机种子、模型名可选发送、三种克隆模式）
 - 测试依赖 `httpx`（MockTransport 参与真实引擎类测试）
 
 ## v1.4.5

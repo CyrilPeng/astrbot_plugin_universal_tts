@@ -352,11 +352,28 @@
             "default": "",
             "hint": "留空则不发送 model，由服务端使用当前加载的模型；填写后原样传入该模型名"
           },
+          "mode": {
+            "description": "克隆模式",
+            "type": "string",
+            "default": "Same language",
+            "options": [
+              "Same language",
+              "Cross-lingual",
+              "Instruct"
+            ],
+            "hint": "Same language：当前模式，使用样本转写；Cross-lingual：隐藏并清空转写，跨语种克隆；Instruct：额外发送 Instruction 指令"
+          },
           "transcript": {
             "description": "样本转写文本",
             "type": "text",
             "default": "",
-            "hint": "样本音频里说的原话；部分模型克隆时需要，留空则不发送"
+            "hint": "样本音频里说的原话；Same language / Instruct 模式下使用，Cross-lingual 模式不发送"
+          },
+          "instructions": {
+            "description": "Instruction 指令",
+            "type": "text",
+            "default": "",
+            "hint": "仅 Instruct 模式发送；例如：用四川话说这句话"
           },
           "language": {
             "description": "生成文本语言",

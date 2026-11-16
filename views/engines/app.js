@@ -561,9 +561,13 @@ function renderEditor() {
   });
 
   const items = (state.templates[templateKey] || {}).items || {};
+  const mode = String(draft.mode || "Same language");
   els.fields.innerHTML = "";
   Object.entries(items).forEach(([key, spec]) => {
     if (!spec || typeof spec !== "object") return;
+    // 克隆模式联动：Cross-lingual 隐藏转写，Instruct 才显示 Instruction。
+    if (key === "transcript" && mode === "Cross-lingual") return;
+    if (key === "instructions" && mode !== "Instruct") return;
     els.fields.appendChild(renderField(key, spec, draft[key], editing.secrets.has(key)));
   });
 }
@@ -621,6 +625,15 @@ function renderField(key, spec, value, secretIsSet) {
   input.name = key;
   if (secretIsSet && type !== "bool") {
     input.placeholder = t("secret_set", "已设置，留空表示不修改");
+  }
+  if (key === "mode") {
+    input.addEventListener("change", () => {
+      if (!editing) return;
+      const next = collectDraft();
+      next.mode = input.value;
+      editing.draft = next;
+      renderEditor();
+    });
   }
   wrap.appendChild(input);
 
@@ -949,7 +962,10 @@ async function deleteSampleEntry(sample) {
 function collectDraft() {
   if (!editing) return {};
   const items = (state.templates[editing.templateKey] || {}).items || {};
-  const draft = { __template_key: editing.templateKey };
+  // 从现有草稿开始，保留被模式隐藏的字段值（如 Cross-lingual 下的转写）。
+  const draft = Object.assign({}, editing.draft || {}, {
+    __template_key: editing.templateKey,
+  });
   for (const [key, spec] of Object.entries(items)) {
     if (!spec || typeof spec !== "object") continue;
     const input = els.fields.querySelector(`[name="${CSS.escape(key)}"]`);

@@ -52,6 +52,8 @@ class OpenAICloneEngine(TTSEngine):
         ).rstrip("/")
         self.model: str = str(config.get("model", "") or "").strip()
         self.transcript: str = str(config.get("transcript", "") or "").strip()
+        self.mode: str = self._normalize_mode(config.get("mode"))
+        self.instructions: str = str(config.get("instructions", "") or "").strip()
         self.language: str = str(config.get("language", "") or "auto").strip()
         self.voice_id_override: str = str(config.get("voice_id", "") or "").strip()
         self.audio_format: str = str(config.get("format", "mp3") or "mp3").lower().lstrip(".")
@@ -93,6 +95,16 @@ class OpenAICloneEngine(TTSEngine):
             return float(value)
         except (TypeError, ValueError):
             return 1.0
+
+    @staticmethod
+    def _normalize_mode(value) -> str:
+        """把界面的三种模式规范成 CosyVoice3 的 template_name。"""
+        text = str(value or "Same language").strip().lower().replace("_", "-")
+        if text in ("cross-lingual", "crosslingual", "cross"):
+            return "cross_lingual"
+        if text == "instruct":
+            return "instruct"
+        return "same_language"
 
     @staticmethod
     def _parse_seed(value) -> int | None:
@@ -221,7 +233,7 @@ class OpenAICloneEngine(TTSEngine):
             "name": name,
             "source": {"input_id": input_id},
         }
-        if self.transcript:
+        if self.transcript and self.mode != "cross_lingual":
             payload["transcript"] = self.transcript
         response = await self._get_client().post(
             f"{self.api_base}/audio/voices",
@@ -332,6 +344,20 @@ class OpenAICloneEngine(TTSEngine):
             payload["seed"] = self.seed
         if abs(self.speed - 1.0) > 1e-9:
             payload["speed"] = self.speed
+
+        # CosyVoice3 的三种模式通过 audio_options.template_name 选择。
+        # cross_lingual 要显式清空 reference_text，否则服务端会回退到保存音色里的转写。
+        if self.mode == "cross_lingual":
+            payload["reference_text"] = ""
+            payload["audio_options"] = {"template_name": "cross_lingual"}
+        elif self.mode == "instruct":
+            payload["audio_options"] = {"template_name": "instruct"}
+            if self.transcript:
+                payload["reference_text"] = self.transcript
+            if self.instructions:
+                payload["instructions"] = self.instructions
+        elif self.transcript:
+            payload["reference_text"] = self.transcript
         return payload
 
     async def _request_speech(self, text: str, voice_id: str) -> tuple[bytes, str]:

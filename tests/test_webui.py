@@ -1334,7 +1334,7 @@ def main():
     check("openai_clone 模板已入 schema", "openai_clone" in inst._engine_templates())
     check(
         "openai_clone 模板字段完整",
-        {"api_base", "model", "transcript", "language", "seed", "voice_id", "voice_sample_name"}
+        {"api_base", "model", "mode", "transcript", "instructions", "language", "seed", "voice_id", "voice_sample_name"}
         <= set(inst._engine_templates()["openai_clone"]["items"]),
     )
     try:
@@ -1378,6 +1378,49 @@ def main():
         ._build_speech_payload("x", "v")
         .get("model")
         == "my-model",
+    )
+    same = Clone({"api_key": "k", "transcript": "参考原话"})
+    same_payload = same._build_speech_payload("x", "v")
+    check("Same language 发送转写", same_payload.get("reference_text") == "参考原话")
+    check("Same language 不传 template_name", "audio_options" not in same_payload)
+    cross = Clone(
+        {"api_key": "k", "mode": "Cross-lingual", "transcript": "参考原话"}
+    )
+    cross_payload = cross._build_speech_payload("x", "v")
+    check("Cross-lingual 清空转写", cross_payload.get("reference_text") == "", str(cross_payload))
+    check(
+        "Cross-lingual 传 template_name",
+        cross_payload.get("audio_options") == {"template_name": "cross_lingual"},
+        str(cross_payload),
+    )
+    instruct = Clone(
+        {
+            "api_key": "k",
+            "mode": "Instruct",
+            "transcript": "参考原话",
+            "instructions": "用四川话说这句话",
+        }
+    )
+    instruct_payload = instruct._build_speech_payload("x", "v")
+    check(
+        "Instruct 传 template_name",
+        instruct_payload.get("audio_options") == {"template_name": "instruct"},
+        str(instruct_payload),
+    )
+    check(
+        "Instruct 发送指令",
+        instruct_payload.get("instructions") == "用四川话说这句话",
+        str(instruct_payload),
+    )
+    check(
+        "Instruct 仍发送转写",
+        instruct_payload.get("reference_text") == "参考原话",
+        str(instruct_payload),
+    )
+    instruct_empty = Clone({"api_key": "k", "mode": "Instruct"})
+    check(
+        "Instruct 无指令时不发送",
+        "instructions" not in instruct_empty._build_speech_payload("x", "v"),
     )
     check("auto 语言不发送", "language" not in clone._build_speech_payload("x", "v"))
     clone_lang = Clone({"api_key": "k", "language": "Japanese"})
@@ -1461,6 +1504,7 @@ def main():
             "voice": "voice-1",
             "response_format": "mp3",
             "model": "cosy",
+            "reference_text": "样本原话",
         },
         str(spoken[0]),
     )
