@@ -357,15 +357,6 @@ body {
   min-width: 0;
 }
 
-.sample-row input[type="text"] {
-  flex: 1;
-  min-width: 0;
-}
-
-.voice-picker {
-  width: 100%;
-}
-
 input[type="text"],
 input[type="number"],
 select,

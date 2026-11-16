@@ -1334,7 +1334,7 @@ def main():
     check("openai_clone 模板已入 schema", "openai_clone" in inst._engine_templates())
     check(
         "openai_clone 模板字段完整",
-        {"api_base", "model", "voice_name", "transcript", "voice_id", "voice_sample_name"}
+        {"api_base", "model", "transcript", "voice_id", "voice_sample_name"}
         <= set(inst._engine_templates()["openai_clone"]["items"]),
     )
     try:
@@ -1347,7 +1347,6 @@ def main():
             "api_key": "k",
             "api_base": "http://127.0.0.1:8888/v1/",
             "model": "audio-cpp/audio.cpp-gguf/CosyVoice3-GGUF",
-            "voice_name": "Me",
             "speed": 1.0,
             "format": "mp3",
         }
@@ -1392,7 +1391,6 @@ def main():
         {
             "api_key": "k",
             "model": "cosy",
-            "voice_name": "Me",
             "transcript": "样本原话",
             "format": "mp3",
         },
@@ -1413,7 +1411,7 @@ def main():
     check(
         "创建音色请求正确",
         created[0] == {
-            "name": "Me",
+            "name": "clone_sample",
             "source": {"input_id": "input-1"},
             "transcript": "样本原话",
         },
@@ -1459,7 +1457,7 @@ def main():
         return httpx.Response(404)
 
     retry_clone = Clone(
-        {"api_key": "k", "voice_name": "Retry", "format": "mp3"},
+        {"api_key": "k", "format": "mp3"},
         {"voice_clone_samples": [str(sample2)]},
     )
     retry_clone._client = httpx.AsyncClient(transport=httpx.MockTransport(_retry_handler))
@@ -1473,6 +1471,7 @@ def main():
     check("音色失效后自动重建成功", audio == b"MP3DATA")
     check("音色失效后重新上传", len(uploaded2) == 2, str(len(uploaded2)))
     check("音色失效后重新创建", len(created2) == 2, str(len(created2)))
+    check("音色名取样本文件名", created2[0]["name"] == "clone_sample_2", str(created2[0]))
     check("重试使用新 voice id", spoken2[-1]["voice"] == "voice-2", str(spoken2[-1]))
     asyncio.run(retry_clone.close())
 

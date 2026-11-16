@@ -51,7 +51,6 @@ class OpenAICloneEngine(TTSEngine):
             config.get("api_base", "") or "http://127.0.0.1:8888/v1"
         ).rstrip("/")
         self.model: str = str(config.get("model", "") or "").strip()
-        self.voice_name: str = str(config.get("voice_name", "") or "universal_tts").strip()
         self.transcript: str = str(config.get("transcript", "") or "").strip()
         self.voice_id_override: str = str(config.get("voice_id", "") or "").strip()
         self.audio_format: str = str(config.get("format", "mp3") or "mp3").lower().lstrip(".")
@@ -128,9 +127,16 @@ class OpenAICloneEngine(TTSEngine):
     # ------------------------------------------------------------------
 
     def _cache_key_for(self, sample_bytes: bytes) -> str:
-        """缓存键：同一服务、同一音色名、同一份样本内容才复用。"""
+        """缓存键：同一服务、同一份样本内容就复用，与文件名/显示名无关。"""
         digest = hashlib.sha256(sample_bytes).hexdigest()
-        return f"{self.api_base}|{self.voice_name}|{digest}"
+        return f"{self.api_base}|{digest}"
+
+    def _voice_display_name(self, sample_path: Path) -> str:
+        """保存音色的显示名默认取样本文件名，避免再让用户单独填写。"""
+        name = sample_path.stem.strip()
+        if not name:
+            name = (self.instance_name or "universal_tts").strip()
+        return name[:80] or "universal_tts"
 
     def _load_cache(self) -> dict:
         try:
@@ -192,9 +198,9 @@ class OpenAICloneEngine(TTSEngine):
             )
         return input_id
 
-    async def _create_voice(self, input_id: str) -> str:
+    async def _create_voice(self, input_id: str, name: str) -> str:
         payload: dict = {
-            "name": self.voice_name or "universal_tts",
+            "name": name,
             "source": {"input_id": input_id},
         }
         if self.transcript:
@@ -237,7 +243,9 @@ class OpenAICloneEngine(TTSEngine):
                 return self._voice_id
 
             input_id = await self._upload_input(sample_path, sample_bytes)
-            voice_id = await self._create_voice(input_id)
+            voice_id = await self._create_voice(
+                input_id, self._voice_display_name(sample_path)
+            )
             self._voice_id = voice_id
             self._save_cache_entry(key, voice_id, input_id)
             logger.info(

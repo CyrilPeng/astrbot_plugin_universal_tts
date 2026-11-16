@@ -634,8 +634,9 @@ function renderField(key, spec, value, secretIsSet) {
   return wrap;
 }
 
-/** 已有音色字段：手动填写 + 从服务端读取后选择。
+/** 已有音色字段：下拉选择服务端已保存的音色。
  *  服务端路由是 engines/voices；只有实现了 list_voices 的引擎返回列表。
+ *  空值表示不指定 voice_id，由引擎用样本自动创建。
  */
 function renderVoiceField(key, spec, value) {
   const wrap = document.createElement("div");
@@ -649,11 +650,29 @@ function renderVoiceField(key, spec, value) {
   const row = document.createElement("div");
   row.className = "sample-row";
 
-  const input = document.createElement("input");
-  input.type = "text";
-  input.name = key;
-  input.value = value === undefined || value === null ? "" : String(value);
-  row.appendChild(input);
+  const select = document.createElement("select");
+  select.name = key;
+
+  const emptyOption = document.createElement("option");
+  emptyOption.value = "";
+  emptyOption.textContent = t(
+    "voice_pick",
+    "选择要使用的音色（留空自动创建）",
+  );
+  select.appendChild(emptyOption);
+
+  const current = value === undefined || value === null ? "" : String(value);
+  if (current) {
+    const currentOption = document.createElement("option");
+    currentOption.value = current;
+    currentOption.textContent = t("voice_missing_current", "当前 ID 不在列表中：{id}", {
+      id: current,
+    });
+    currentOption.selected = true;
+    select.appendChild(currentOption);
+  }
+
+  row.appendChild(select);
 
   const button = document.createElement("button");
   button.type = "button";
@@ -662,10 +681,9 @@ function renderVoiceField(key, spec, value) {
   row.appendChild(button);
   wrap.appendChild(row);
 
-  const picker = document.createElement("select");
-  picker.className = "voice-picker";
-  picker.hidden = true;
-  wrap.appendChild(picker);
+  const status = document.createElement("span");
+  status.className = "field-hint";
+  wrap.appendChild(status);
 
   if (spec.hint) {
     const hint = document.createElement("span");
@@ -674,40 +692,104 @@ function renderVoiceField(key, spec, value) {
     wrap.appendChild(hint);
   }
 
-  button.addEventListener("click", async () => {
-    const payload = { engine: collectDraft() };
-    if (editing && editing.index !== null) payload.index = editing.index;
-    button.disabled = true;
+  let loaded = false;
+  let loading = false;
+
+  function hasKey() {
+    const draft = collectDraft();
+    if (String(draft.api_key || "").trim()) return true;
+    return Boolean(editing && editing.secrets && editing.secrets.has("api_key"));
+  }
+
+  function renderOptions(voices, keep) {
+    const sorted = voices.slice().sort((a, b) => {
+      const an = String(a.name || a.id || "");
+      const bn = String(b.name || b.id || "");
+      return an.localeCompare(bn, "zh-Hans-CN") || String(a.id).localeCompare(String(b.id));
+    });
+    const counts = {};
+    sorted.forEach((voice) => {
+      const name = String(voice.name || "");
+      if (name) counts[name] = (counts[name] || 0) + 1;
+    });
+
+    select.innerHTML = "";
+    const empty = document.createElement("option");
+    empty.value = "";
+    empty.textContent = t(
+      "voice_pick",
+      "选择要使用的音色（留空自动创建）",
+    );
+    select.appendChild(empty);
+
+    sorted.forEach((voice) => {
+      const id = String(voice.id || "");
+      if (!id) return;
+      const name = String(voice.name || "");
+      const option = document.createElement("option");
+      option.value = id;
+      option.textContent = name ? (counts[name] > 1 ? `${name} (${id})` : name) : id;
+      option.title = id;
+      select.appendChild(option);
+    });
+
+    if (keep && !sorted.some((voice) => String(voice.id || "") === keep)) {
+      const currentOption = document.createElement("option");
+      currentOption.value = keep;
+      currentOption.textContent = t(
+        "voice_missing_current",
+        "当前 ID 不在列表中：{id}",
+        { id: keep },
+      );
+      select.appendChild(currentOption);
+    }
+
+    select.value = keep;
+    if (select.value !== keep) select.value = "";
+  }
+
+  async function loadVoices() {
+    if (loading) return;
+    loading = true;
     const original = button.textContent;
+    button.disabled = true;
     button.textContent = t("voice_fetching", "读取中…");
+    status.textContent = t("voice_fetching", "读取中…");
     try {
+      const payload = { engine: collectDraft() };
+      if (editing && editing.index !== null) payload.index = editing.index;
       const data = await bridge.apiPost("engines/voices", withToken(payload));
       const voices = Array.isArray(data.voices) ? data.voices : [];
-      picker.innerHTML = "";
-      const empty = document.createElement("option");
-      empty.value = "";
-      empty.textContent = voices.length
-        ? t("voice_pick", "选择要使用的音色")
+      const keep = select.value;
+      renderOptions(voices, keep);
+      loaded = true;
+      status.textContent = voices.length
+        ? t("voice_loaded", "已加载 {count} 个音色", { count: voices.length })
         : t("voice_empty", "服务端没有已保存的音色");
-      picker.appendChild(empty);
-      voices.forEach((voice) => {
-        const option = document.createElement("option");
-        option.value = String(voice.id || "");
-        const name = String(voice.name || "");
-        option.textContent = name ? `${name} (${voice.id})` : String(voice.id || "");
-        picker.appendChild(option);
-      });
-      picker.hidden = voices.length === 0;
-      picker.onchange = () => {
-        if (picker.value) input.value = picker.value;
-      };
     } catch (error) {
-      await reportError(error, "inline");
+      status.textContent = error && error.message ? error.message : String(error);
     } finally {
+      loading = false;
       button.disabled = false;
       button.textContent = original;
     }
+  }
+
+  button.addEventListener("click", loadVoices);
+  select.addEventListener("focus", () => {
+    if (loaded || loading) return;
+    if (hasKey()) {
+      loadVoices();
+    } else {
+      status.textContent = t("voice_need_key", "先填写 API Key，再读取音色");
+    }
   });
+
+  if (hasKey()) {
+    setTimeout(loadVoices, 0);
+  } else {
+    status.textContent = t("voice_need_key", "先填写 API Key，再读取音色");
+  }
 
   return wrap;
 }
