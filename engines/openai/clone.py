@@ -57,6 +57,7 @@ class OpenAICloneEngine(TTSEngine):
         self.audio_format: str = str(config.get("format", "mp3") or "mp3").lower().lstrip(".")
         self.timeout: int = self._coerce_timeout(config.get("timeout", 120))
         self.speed: float = self._coerce_speed(config.get("speed", 1.0))
+        self.seed: int | None = self._parse_seed(config.get("seed"))
 
         self._sample_paths: list[str] = list(
             (plugin_config or {}).get("voice_clone_samples", []) or []
@@ -92,6 +93,22 @@ class OpenAICloneEngine(TTSEngine):
             return float(value)
         except (TypeError, ValueError):
             return 1.0
+
+    @staticmethod
+    def _parse_seed(value) -> int | None:
+        """留空表示不发送；填写时必须是整数。"""
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            seed = int(text, 10)
+        except ValueError:
+            raise ValueError("OpenAI 克隆 TTS: seed 必须是整数，留空表示不设置")
+        if not -(2**63) <= seed <= 2**64 - 1:
+            raise ValueError("OpenAI 克隆 TTS: seed 超出允许范围")
+        return seed
 
     # ------------------------------------------------------------------
     # HTTP 基础设施
@@ -311,6 +328,8 @@ class OpenAICloneEngine(TTSEngine):
             payload["model"] = self.model
         if self.language and self.language.lower() != "auto":
             payload["language"] = self.language
+        if self.seed is not None:
+            payload["seed"] = self.seed
         if abs(self.speed - 1.0) > 1e-9:
             payload["speed"] = self.speed
         return payload

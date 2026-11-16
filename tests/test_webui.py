@@ -1334,7 +1334,7 @@ def main():
     check("openai_clone 模板已入 schema", "openai_clone" in inst._engine_templates())
     check(
         "openai_clone 模板字段完整",
-        {"api_base", "model", "transcript", "language", "voice_id", "voice_sample_name"}
+        {"api_base", "model", "transcript", "language", "seed", "voice_id", "voice_sample_name"}
         <= set(inst._engine_templates()["openai_clone"]["items"]),
     )
     try:
@@ -1379,6 +1379,21 @@ def main():
         "语言 auto 不发送",
         "language" not in clone_lang_auto._build_speech_payload("x", "v"),
     )
+    check("默认不发送 seed", "seed" not in clone._build_speech_payload("x", "v"))
+    clone_seed = Clone({"api_key": "k", "seed": "12345"})
+    check(
+        "指定 seed 会发送且为整数",
+        clone_seed._build_speech_payload("x", "v").get("seed") == 12345,
+        str(clone_seed._build_speech_payload("x", "v")),
+    )
+    clone_seed_zero = Clone({"api_key": "k", "seed": "0"})
+    check("seed 0 是有效值", clone_seed_zero._build_speech_payload("x", "v").get("seed") == 0)
+    check("seed 空白视为未设置", Clone({"api_key": "k", "seed": "  "}).seed is None)
+    try:
+        Clone({"api_key": "k", "seed": "abc"})
+        check("非法 seed 应报错", False)
+    except ValueError:
+        check("非法 seed 应报错", True)
 
     # 用 MockTransport 跑完整的 inputs → voices → speech，并验证缓存复用
     sample = Path("clone_sample.wav").resolve()

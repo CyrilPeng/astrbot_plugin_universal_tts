@@ -29,6 +29,7 @@ POST {api_base}/audio/speech                 {"model", "voice", "input", "respon
 - **可跳过自动注册**：已有保存音色时，下拉选择 `voice_id` 即可，不再上传样本
 - **可查看服务端音色**：`voice_id` 是下拉框，打开编辑器时自动调用 `GET /audio/voices` 加载服务端已保存的音色并按名称展示；留空表示自动创建，旁边的「读取已有音色」可手动刷新
 - **生成语言可选**：`language` 默认 `auto`，不发送语言提示；选择 `Chinese`、`Japanese` 等后会作为 `language` 参数发送给支持该提示的模型
+- **可固定随机种子**：`seed` 留空时不发送；填写整数会作为 `seed` 参数传入（best-effort 确定性，不保证完全复现）
 - **可留空模型**：`model` 留空时使用服务端当前加载的模型
 
 ### 使用步骤
@@ -47,6 +48,7 @@ POST {api_base}/audio/speech                 {"model", "voice", "input", "respon
    | `voice_sample_name` | 指定使用哪个已上传样本；留空用第一个 |
    | `format` | 输出格式，默认 `mp3` |
    | `speed` | 语速；1.0 表示不发送该参数 |
+   | `seed` | 随机种子；留空不发送，填写整数则传入 |
    | `timeout` | 超时秒数，默认 120 |
 
 3. 把该引擎设为第一个引擎，或在「当前生效的引擎实例名称」中填写其实例名。

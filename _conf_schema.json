@@ -408,6 +408,12 @@
             "default": 1.0,
             "hint": "1.0 表示不发送该参数"
           },
+          "seed": {
+            "description": "随机种子（可选）",
+            "type": "string",
+            "default": "",
+            "hint": "整数；留空则不发送 seed 参数，由服务端随机"
+          },
           "timeout": {
             "description": "超时（秒）",
             "type": "int",

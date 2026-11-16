@@ -11,6 +11,7 @@
   - 缓存落盘到 `data/plugin_data/astrbot_plugin_universal_tts/openai_clone_voices.json`，重启后优先复用；样本或服务地址变化时自动重建
   - 保存音色名称默认取样本文件名（如 `me.wav` → `me`），移除 `voice_name` 配置项
   - 新增 `language` 选项，默认 `auto`（不发送语言提示）；选择具体语言后作为 `language` 参数发送给支持该提示的模型
+  - 新增 `seed` 选项，留空不发送；填写整数时作为 `seed` 参数传入，用于 best-effort 确定性生成
   - 合成返回音色相关错误（服务端重启/音色被删除）时自动重新上传并创建一次
   - 支持直接填写已有 `voice_id` 跳过上传；`model` 留空时使用服务端当前加载的模型
   - WebUI 的 `voice_id` 改为下拉框，自动调用 `GET /audio/voices` 加载服务端音色并按名称展示；留空表示自动创建
@@ -21,7 +22,7 @@
 
 ### 说明
 
-- 测试 319 -> 352 项（新增克隆引擎模板、参数校验、完整 `inputs → voices → speech` 流程、缓存复用与失效重建、读取已有音色接口、音色名取样本文件名、生成语言参数）
+- 测试 319 -> 357 项（新增克隆引擎模板、参数校验、完整 `inputs → voices → speech` 流程、缓存复用与失效重建、读取已有音色接口、音色名取样本文件名、生成语言参数、随机种子）
 - 测试依赖 `httpx`（MockTransport 参与真实引擎类测试）
 
 ## v1.4.5
