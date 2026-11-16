@@ -9,6 +9,7 @@ import shutil
 import sys
 import tempfile
 import types
+import httpx
 import yaml
 from pathlib import Path
 
@@ -336,7 +337,7 @@ def main():
     check("_secrets 标记正确", e0["_secrets"] == ["api_key"], str(e0.get("_secrets")))
     check("空密钥不列入 _secrets", e1["_secrets"] == [])
     check("非敏感字段保留", e0["api_base"].endswith("/v1"))
-    check("templates 已返回", len(payload["templates"]) == 9, str(len(payload["templates"])))
+    check("templates 已返回", len(payload["templates"]) == 10, str(len(payload["templates"])))
 
     print("\n[3] 字段类型转换")
     check("int 转换", inst._coerce_field("30", "int", 0) == 30)
@@ -1321,6 +1322,158 @@ def main():
     _spec.loader.exec_module(_pkg)
     V25 = _pkg.MiMoV25Engine
     check("注册表已移除 mimo_v2", "mimo_v2" not in _pkg.ENGINE_REGISTRY)
+
+    # OpenAI 兼容克隆引擎：模板、注册表、参数校验与请求体
+    Clone = _pkg.OpenAICloneEngine
+    check(
+        "openai_clone 已注册",
+        _pkg.ENGINE_REGISTRY.get("openai_clone") is Clone,
+        str(sorted(_pkg.ENGINE_REGISTRY)),
+    )
+    check("openai_clone 模板已入 schema", "openai_clone" in inst._engine_templates())
+    check(
+        "openai_clone 模板字段完整",
+        {"api_base", "model", "voice_name", "transcript", "voice_id", "voice_sample_name"}
+        <= set(inst._engine_templates()["openai_clone"]["items"]),
+    )
+    try:
+        Clone({"api_key": ""})
+        check("openai_clone 缺 api_key 应报错", False)
+    except ValueError:
+        check("openai_clone 缺 api_key 应报错", True)
+    clone = Clone(
+        {
+            "api_key": "k",
+            "api_base": "http://127.0.0.1:8888/v1/",
+            "model": "audio-cpp/audio.cpp-gguf/CosyVoice3-GGUF",
+            "voice_name": "Me",
+            "speed": 1.0,
+            "format": "mp3",
+        }
+    )
+    check("api_base 去除尾部斜杠", clone.api_base == "http://127.0.0.1:8888/v1")
+    check("缓存键稳定", clone._cache_key_for(b"abc") == clone._cache_key_for(b"abc"))
+    check("缓存键随样本变化", clone._cache_key_for(b"abc") != clone._cache_key_for(b"abd"))
+    payload = clone._build_speech_payload("你好", "voice-1")
+    check(
+        "speech 请求体正确",
+        payload
+        == {
+            "input": "你好",
+            "voice": "voice-1",
+            "response_format": "mp3",
+            "model": "audio-cpp/audio.cpp-gguf/CosyVoice3-GGUF",
+        },
+        str(payload),
+    )
+    clone_speed = Clone({"api_key": "k", "speed": 1.2, "format": "wav"})
+    check("非默认语速才发送", clone_speed._build_speech_payload("x", "v").get("speed") == 1.2)
+
+    # 用 MockTransport 跑完整的 inputs → voices → speech，并验证缓存复用
+    sample = Path("clone_sample.wav").resolve()
+    sample.write_bytes(b"RIFF-sample-bytes")
+    uploaded, created, spoken = [], [], []
+
+    def _clone_handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/audio/inputs"):
+            uploaded.append((request.url.params.get("name"), request.content))
+            return httpx.Response(201, json={"id": "input-1"})
+        if path.endswith("/audio/voices"):
+            created.append(json.loads(request.content))
+            return httpx.Response(201, json={"id": "voice-1"})
+        if path.endswith("/audio/speech"):
+            spoken.append(json.loads(request.content))
+            return httpx.Response(200, content=b"MP3DATA")
+        return httpx.Response(404)
+
+    clone = Clone(
+        {
+            "api_key": "k",
+            "model": "cosy",
+            "voice_name": "Me",
+            "transcript": "样本原话",
+            "format": "mp3",
+        },
+        {"voice_clone_samples": [str(sample)]},
+    )
+    clone._client = httpx.AsyncClient(transport=httpx.MockTransport(_clone_handler))
+
+    async def _run_clone():
+        first = await clone.synthesize("你好")
+        second = await clone.synthesize("第二句")
+        await clone.close()
+        return first, second
+
+    (audio, fmt), _ = asyncio.run(_run_clone())
+    check("克隆合成返回音频", (audio, fmt) == (b"MP3DATA", "mp3"), f"{audio!r} {fmt!r}")
+    check("上传了样本且文件名正确", uploaded[0][0] == "clone_sample.wav", str(uploaded[0][0]))
+    check("上传内容为样本原始字节", uploaded[0][1] == b"RIFF-sample-bytes")
+    check(
+        "创建音色请求正确",
+        created[0] == {
+            "name": "Me",
+            "source": {"input_id": "input-1"},
+            "transcript": "样本原话",
+        },
+        str(created[0]),
+    )
+    check(
+        "合成请求使用创建的 voice id",
+        spoken[0] == {
+            "input": "你好",
+            "voice": "voice-1",
+            "response_format": "mp3",
+            "model": "cosy",
+        },
+        str(spoken[0]),
+    )
+    check("第二次合成复用音色", (len(uploaded), len(created)) == (1, 1), f"{len(uploaded)},{len(created)}")
+    check("第二次合成不再重复创建", spoken[1]["voice"] == "voice-1")
+    cache_file = Clone.DEFAULT_DATA_DIR / Clone.CACHE_FILE_NAME
+    check("音色缓存已落盘", cache_file.exists())
+    check("音色缓存含 voice id", "voice-1" in cache_file.read_text(encoding="utf-8"))
+
+    # 服务端音色失效（400 提示 clone）时自动重建一次
+    sample2 = Path("clone_sample_2.wav").resolve()
+    sample2.write_bytes(b"RIFF-sample-2")
+    uploaded2, created2, spoken2 = [], [], []
+
+    def _retry_handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/audio/inputs"):
+            uploaded2.append(request.content)
+            return httpx.Response(201, json={"id": f"input-{len(uploaded2)}"})
+        if path.endswith("/audio/voices"):
+            created2.append(json.loads(request.content))
+            return httpx.Response(201, json={"id": f"voice-{len(created2)}"})
+        if path.endswith("/audio/speech"):
+            spoken2.append(json.loads(request.content))
+            if len(spoken2) == 1:
+                return httpx.Response(
+                    400,
+                    json={"error": {"message": "CosyVoice3 speaks in a voice cloned from a recording."}},
+                )
+            return httpx.Response(200, content=b"MP3DATA")
+        return httpx.Response(404)
+
+    retry_clone = Clone(
+        {"api_key": "k", "voice_name": "Retry", "format": "mp3"},
+        {"voice_clone_samples": [str(sample2)]},
+    )
+    retry_clone._client = httpx.AsyncClient(transport=httpx.MockTransport(_retry_handler))
+
+    async def _run_retry():
+        result = await retry_clone.synthesize("重试")
+        await retry_clone.close()
+        return result
+
+    audio, _ = asyncio.run(_run_retry())
+    check("音色失效后自动重建成功", audio == b"MP3DATA")
+    check("音色失效后重新上传", len(uploaded2) == 2, str(len(uploaded2)))
+    check("音色失效后重新创建", len(created2) == 2, str(len(created2)))
+    check("重试使用新 voice id", spoken2[-1]["voice"] == "voice-2", str(spoken2[-1]))
+    asyncio.run(retry_clone.close())
 
     def _prefix(style="", singing=False, text="月亮代表我的心"):
         e = V25({"api_key": "k", "style": style, "singing_mode": singing})

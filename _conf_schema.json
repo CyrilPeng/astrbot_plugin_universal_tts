@@ -326,6 +326,82 @@
           }
         }
       },
+      "openai_clone": {
+        "name": "[OpenAI] 兼容克隆（上传样本 → 保存音色 → 合成）",
+        "hint": "适用于 Unsloth Studio 等提供 /audio/inputs、/audio/voices、/audio/speech 的 OpenAI 兼容服务；首次合成自动上传样本并保存音色",
+        "items": {
+          "instance_name": {
+            "description": "实例名称（用于标识和切换）",
+            "type": "string",
+            "default": "openai_clone"
+          },
+          "api_key": {
+            "description": "API Key",
+            "type": "string",
+            "default": ""
+          },
+          "api_base": {
+            "description": "API Base URL",
+            "type": "string",
+            "default": "http://127.0.0.1:8888/v1",
+            "hint": "填到 /v1 为止，不要带 /audio/speech"
+          },
+          "model": {
+            "description": "模型名称",
+            "type": "string",
+            "default": "",
+            "hint": "留空则使用服务端当前加载的模型；例如 audio-cpp/audio.cpp-gguf/CosyVoice3-GGUF"
+          },
+          "voice_name": {
+            "description": "保存音色的名称",
+            "type": "string",
+            "default": "universal_tts",
+            "hint": "首次上传样本时在服务端创建的音色名称"
+          },
+          "transcript": {
+            "description": "样本转写文本",
+            "type": "text",
+            "default": "",
+            "hint": "样本音频里说的原话；部分模型克隆时需要，留空则不发送"
+          },
+          "voice_id": {
+            "description": "已有音色 ID（可选）",
+            "type": "string",
+            "default": "",
+            "hint": "填写后跳过上传与创建，直接使用该音色；留空则自动上传样本创建"
+          },
+          "voice_sample_name": {
+            "description": "音色样本文件名",
+            "type": "string",
+            "default": "",
+            "hint": "留空则使用第一个已上传的样本"
+          },
+          "format": {
+            "description": "输出格式",
+            "type": "string",
+            "default": "mp3",
+            "options": [
+              "mp3",
+              "wav",
+              "flac",
+              "opus",
+              "aac",
+              "pcm"
+            ]
+          },
+          "speed": {
+            "description": "语速（0.25-4.0）",
+            "type": "float",
+            "default": 1.0,
+            "hint": "1.0 表示不发送该参数"
+          },
+          "timeout": {
+            "description": "超时（秒）",
+            "type": "int",
+            "default": 120
+          }
+        }
+      },
       "volcengine": {
         "name": "[火山引擎] TTS（SAMI API）",
         "hint": "需在火山引擎控制台获取 appkey 和 token",

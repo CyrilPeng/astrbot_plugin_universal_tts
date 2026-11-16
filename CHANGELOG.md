@@ -1,5 +1,24 @@
 # 更新日志
 
+## 本分支新增（未发布）
+
+新增 OpenAI 兼容的音色克隆引擎，适配 Unsloth Studio / audio.cpp 等两步式语音接口。
+
+### 新增
+
+- **`openai_clone` 引擎**：`POST /audio/inputs` 上传样本 → `POST /audio/voices` 创建保存音色 → `POST /audio/speech` 合成
+  - 首次合成自动完成注册，之后复用 `voice_id`
+  - 缓存落盘到 `data/plugin_data/astrbot_plugin_universal_tts/openai_clone_voices.json`，重启后优先复用；样本、音色名或服务地址变化时自动重建
+  - 合成返回音色相关错误（服务端重启/音色被删除）时自动重新上传并创建一次
+  - 支持直接填写已有 `voice_id` 跳过上传；`model` 留空时使用服务端当前加载的模型
+- WebUI 新增 `[OpenAI] 兼容克隆（上传样本 → 保存音色 → 合成）` 模板，可与其他引擎一样增删改查、试听和会话绑定
+- README 改写为「原项目分支 + 本分支新增支持」说明
+
+### 说明
+
+- 测试 319 -> 341 项（新增克隆引擎模板、参数校验、完整 `inputs → voices → speech` 流程、缓存复用与失效重建）
+- 测试依赖 `httpx`（MockTransport 参与真实引擎类测试）
+
 ## v1.4.5
 
 跟随 MiMo 官方调整：移除已下线的 v2 模板，V2.5 支持唱歌模式。
