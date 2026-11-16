@@ -40,20 +40,22 @@ POST {api_base}/audio/speech                 {"model", "voice", "input", "respon
 - **音色缓存落盘**：缓存写在 `data/plugin_data/astrbot_plugin_universal_tts/openai_clone_voices.json`，重启后优先复用；样本内容或服务地址变化时自动重建
 - **失效自愈**：服务端重启或删除音色后，合成返回音色相关错误时自动重新上传样本并重建一次
 - **已有音色下拉选择**：`voice_id` 是下拉框，打开编辑器时自动调用 `GET /audio/voices` 加载服务端音色并按名称展示；留空表示用样本自动创建
-- **三种克隆模式**：Same language / Cross-lingual / Instruct
+- **四种克隆模式**：Same language / Cross-lingual / Instruct / None
 - **生成语言可选**：`language` 默认 `auto`，不发送语言提示；可选择 Chinese / Japanese 等
 - **随机种子可选**：`seed` 留空不发送；填写整数时作为 `seed` 参数传入
 - **模型名可选**：`model` 留空不发送，由服务端使用当前加载的模型；填写后原样传入
 
-### 三种克隆模式
+### 四种克隆模式
 
 | 模式 | 界面 | 请求体 |
 |---|---|---|
 | **Same language**（默认） | 显示「样本转写文本」 | 发送 `reference_text`（如果填写）；不带 `audio_options`，使用默认 `zero_shot` |
 | **Cross-lingual** | 隐藏「样本转写文本」 | 发送空 `reference_text` 和 `audio_options: {"template_name": "cross_lingual"}` |
 | **Instruct** | 显示「样本转写文本」+「Instruction 指令」 | 发送 `audio_options: {"template_name": "instruct"}`；填写指令时发送 `instructions` |
+| **None** | 隐藏转写和指令 | 不发送 `reference_text`、`instructions` 或 `audio_options`，只保留 `voice` 参考 |
 
-- 三种模式对应 CosyVoice3 的 `audio_options.template_name`；其它模型不支持时会忽略该选项
+- Same language / Cross-lingual / Instruct 对应 CosyVoice3 的 `audio_options.template_name`；其它模型不支持时会忽略该选项
+- None 是普通生成模式：仍然上传样本、创建/选择音色并发送 `voice`，但不带任何模板、转写或指令参数
 - Cross-lingual 显式发送空 `reference_text`，避免服务端回退到保存音色里的转写
 - 切换模式时，被隐藏字段的值会保留，切回来不会丢失
 
@@ -64,8 +66,8 @@ POST {api_base}/audio/speech                 {"model", "voice", "input", "respon
 | `api_key` | 服务端 API Key |
 | `api_base` | 填到 `/v1` 为止，例如 `http://127.0.0.1:8888/v1` |
 | `model` | 模型名；留空不发送，填写后原样传入（如 `audio-cpp/audio.cpp-gguf/CosyVoice3-GGUF`） |
-| `mode` | 克隆模式：Same language / Cross-lingual / Instruct |
-| `transcript` | 样本音频里说的原话；Cross-lingual 模式下隐藏且不发送 |
+| `mode` | 克隆模式：Same language / Cross-lingual / Instruct / None |
+| `transcript` | 样本音频里说的原话；Cross-lingual 和 None 模式下隐藏且不发送 |
 | `instructions` | Instruction 指令；仅 Instruct 模式显示并发送 |
 | `language` | 生成文本语言，默认 `auto`（不发送提示） |
 | `voice_id` | 下拉选择服务端已保存的音色；留空则用样本自动创建 |

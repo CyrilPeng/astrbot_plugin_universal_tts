@@ -359,9 +359,10 @@
             "options": [
               "Same language",
               "Cross-lingual",
-              "Instruct"
+              "Instruct",
+              "None"
             ],
-            "hint": "Same language：当前模式，使用样本转写；Cross-lingual：隐藏并清空转写，跨语种克隆；Instruct：额外发送 Instruction 指令"
+            "hint": "Same language：使用样本转写；Cross-lingual：隐藏并清空转写；Instruct：额外发送 Instruction 指令；None：普通生成模式，只保留音色参考，不发送转写/指令/模板选项"
           },
           "transcript": {
             "description": "样本转写文本",

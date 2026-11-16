@@ -1422,6 +1422,22 @@ def main():
         "Instruct 无指令时不发送",
         "instructions" not in instruct_empty._build_speech_payload("x", "v"),
     )
+    none_mode = Clone(
+        {
+            "api_key": "k",
+            "mode": "None",
+            "transcript": "参考原话",
+            "instructions": "用四川话说",
+        }
+    )
+    none_payload = none_mode._build_speech_payload("x", "v")
+    check("None 保留音色参考", none_payload.get("voice") == "v")
+    check("None 不发送转写", "reference_text" not in none_payload, str(none_payload))
+    check(
+        "None 不发送模板和指令",
+        "audio_options" not in none_payload and "instructions" not in none_payload,
+        str(none_payload),
+    )
     check("auto 语言不发送", "language" not in clone._build_speech_payload("x", "v"))
     clone_lang = Clone({"api_key": "k", "language": "Japanese"})
     check(

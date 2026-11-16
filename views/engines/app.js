@@ -566,7 +566,7 @@ function renderEditor() {
   Object.entries(items).forEach(([key, spec]) => {
     if (!spec || typeof spec !== "object") return;
     // 克隆模式联动：Cross-lingual 隐藏转写，Instruct 才显示 Instruction。
-    if (key === "transcript" && mode === "Cross-lingual") return;
+    if (key === "transcript" && (mode === "Cross-lingual" || mode === "None")) return;
     if (key === "instructions" && mode !== "Instruct") return;
     els.fields.appendChild(renderField(key, spec, draft[key], editing.secrets.has(key)));
   });

@@ -104,6 +104,8 @@ class OpenAICloneEngine(TTSEngine):
             return "cross_lingual"
         if text == "instruct":
             return "instruct"
+        if text == "none":
+            return "none"
         return "same_language"
 
     @staticmethod
@@ -233,7 +235,7 @@ class OpenAICloneEngine(TTSEngine):
             "name": name,
             "source": {"input_id": input_id},
         }
-        if self.transcript and self.mode != "cross_lingual":
+        if self.transcript and self.mode in ("same_language", "instruct"):
             payload["transcript"] = self.transcript
         response = await self._get_client().post(
             f"{self.api_base}/audio/voices",
@@ -356,6 +358,9 @@ class OpenAICloneEngine(TTSEngine):
                 payload["reference_text"] = self.transcript
             if self.instructions:
                 payload["instructions"] = self.instructions
+        elif self.mode == "none":
+            # 普通生成模式：只带 voice 参考，不发送转写、指令或模板选项。
+            pass
         elif self.transcript:
             payload["reference_text"] = self.transcript
         return payload
