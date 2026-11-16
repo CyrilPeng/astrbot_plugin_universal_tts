@@ -1334,7 +1334,7 @@ def main():
     check("openai_clone 模板已入 schema", "openai_clone" in inst._engine_templates())
     check(
         "openai_clone 模板字段完整",
-        {"api_base", "model", "transcript", "voice_id", "voice_sample_name"}
+        {"api_base", "model", "transcript", "language", "voice_id", "voice_sample_name"}
         <= set(inst._engine_templates()["openai_clone"]["items"]),
     )
     try:
@@ -1368,6 +1368,17 @@ def main():
     )
     clone_speed = Clone({"api_key": "k", "speed": 1.2, "format": "wav"})
     check("非默认语速才发送", clone_speed._build_speech_payload("x", "v").get("speed") == 1.2)
+    check("auto 语言不发送", "language" not in clone._build_speech_payload("x", "v"))
+    clone_lang = Clone({"api_key": "k", "language": "Japanese"})
+    check(
+        "指定语言会发送",
+        clone_lang._build_speech_payload("x", "v").get("language") == "Japanese",
+    )
+    clone_lang_auto = Clone({"api_key": "k", "language": "auto"})
+    check(
+        "语言 auto 不发送",
+        "language" not in clone_lang_auto._build_speech_payload("x", "v"),
+    )
 
     # 用 MockTransport 跑完整的 inputs → voices → speech，并验证缓存复用
     sample = Path("clone_sample.wav").resolve()

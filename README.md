@@ -28,6 +28,7 @@ POST {api_base}/audio/speech                 {"model", "voice", "input", "respon
 - **失效自愈**：服务端重启或删除音色后，合成返回音色相关错误时会自动重新上传样本并重建一次
 - **可跳过自动注册**：已有保存音色时，下拉选择 `voice_id` 即可，不再上传样本
 - **可查看服务端音色**：`voice_id` 是下拉框，打开编辑器时自动调用 `GET /audio/voices` 加载服务端已保存的音色并按名称展示；留空表示自动创建，旁边的「读取已有音色」可手动刷新
+- **生成语言可选**：`language` 默认 `auto`，不发送语言提示；选择 `Chinese`、`Japanese` 等后会作为 `language` 参数发送给支持该提示的模型
 - **可留空模型**：`model` 留空时使用服务端当前加载的模型
 
 ### 使用步骤
@@ -41,6 +42,7 @@ POST {api_base}/audio/speech                 {"model", "voice", "input", "respon
    | `api_base` | 填到 `/v1` 为止，例如 `http://127.0.0.1:8888/v1` |
    | `model` | 模型名；留空则用服务端当前加载的模型 |
    | `transcript` | 样本音频里说的原话；部分模型克隆时需要，可留空 |
+   | `language` | 生成文本语言，默认 `auto`（不发送提示）；可选 Chinese / English / Japanese 等 |
    | `voice_id` | 下拉选择服务端已保存的音色；留空则用样本自动创建 |
    | `voice_sample_name` | 指定使用哪个已上传样本；留空用第一个 |
    | `format` | 输出格式，默认 `mp3` |

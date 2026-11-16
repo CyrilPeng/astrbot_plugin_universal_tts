@@ -358,6 +358,25 @@
             "default": "",
             "hint": "样本音频里说的原话；部分模型克隆时需要，留空则不发送"
           },
+          "language": {
+            "description": "生成文本语言",
+            "type": "string",
+            "default": "auto",
+            "options": [
+              "auto",
+              "Chinese",
+              "English",
+              "Japanese",
+              "Korean",
+              "German",
+              "French",
+              "Russian",
+              "Portuguese",
+              "Spanish",
+              "Italian"
+            ],
+            "hint": "auto 表示不发送语言提示；模型支持时选择目标语言，会作为 language 参数发送"
+          },
           "voice_id": {
             "description": "已有音色（可选）",
             "type": "string",

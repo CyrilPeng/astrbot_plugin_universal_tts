@@ -52,6 +52,7 @@ class OpenAICloneEngine(TTSEngine):
         ).rstrip("/")
         self.model: str = str(config.get("model", "") or "").strip()
         self.transcript: str = str(config.get("transcript", "") or "").strip()
+        self.language: str = str(config.get("language", "") or "auto").strip()
         self.voice_id_override: str = str(config.get("voice_id", "") or "").strip()
         self.audio_format: str = str(config.get("format", "mp3") or "mp3").lower().lstrip(".")
         self.timeout: int = self._coerce_timeout(config.get("timeout", 120))
@@ -308,6 +309,8 @@ class OpenAICloneEngine(TTSEngine):
         }
         if self.model:
             payload["model"] = self.model
+        if self.language and self.language.lower() != "auto":
+            payload["language"] = self.language
         if abs(self.speed - 1.0) > 1e-9:
             payload["speed"] = self.speed
         return payload
