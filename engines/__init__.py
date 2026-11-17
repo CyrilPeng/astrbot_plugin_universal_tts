@@ -2,7 +2,9 @@
 
 from .base import TTSEngine
 from .mimo import MiMoV25Engine, MiMoV25CloneEngine, MiMoV25DesignEngine
-from .openai import OpenAICompatEngine
+from .image import UnslothImageEngine
+from .music import UnslothMusicEngine
+from .openai import OpenAICloneEngine, OpenAICompatEngine
 from .volcengine import VolcengineEngine
 from .aliyun import AliyunEngine
 from .azure import AzureEngine
@@ -14,11 +16,14 @@ ENGINE_REGISTRY: dict[str, type[TTSEngine]] = {
     "mimo_v2_5_voicedesign": MiMoV25DesignEngine,
     "mimo_v2_5_voiceclone": MiMoV25CloneEngine,
     "openai_compat": OpenAICompatEngine,
+    "openai_clone": OpenAICloneEngine,
     "volcengine": VolcengineEngine,
     "aliyun": AliyunEngine,
     "azure": AzureEngine,
     "elevenlabs": ElevenLabsEngine,
     "custom_http": CustomHTTPEngine,
+    "unsloth_music": UnslothMusicEngine,
+    "unsloth_image": UnslothImageEngine,
 }
 
 

@@ -2,13 +2,16 @@
 
 import asyncio
 import atexit
+import base64
 import importlib.util
+import inspect
 import json
 import os
 import shutil
 import sys
 import tempfile
 import types
+import httpx
 import yaml
 from pathlib import Path
 
@@ -306,7 +309,7 @@ def main():
     inst = cls(ctx, cfg)
 
     print("\n[1] Web API 注册")
-    check("注册 23 条路由", len(ctx.routes) == 23, f"实际 {len(ctx.routes)}")
+    check("注册 25 条路由", len(ctx.routes) == 25, f"实际 {len(ctx.routes)}")
     check(
         "路由均带插件名前缀",
         all(r.startswith(f"/{PKG}/") for r in ctx.routes),
@@ -314,6 +317,8 @@ def main():
     )
     for ep in [
         "engines/test",
+        "engines/save/result",
+        "engines/voices",
         "samples",
         "samples/upload",
         "samples/delete",
@@ -336,7 +341,26 @@ def main():
     check("_secrets 标记正确", e0["_secrets"] == ["api_key"], str(e0.get("_secrets")))
     check("空密钥不列入 _secrets", e1["_secrets"] == [])
     check("非敏感字段保留", e0["api_base"].endswith("/v1"))
-    check("templates 已返回", len(payload["templates"]) == 9, str(len(payload["templates"])))
+    check("templates 已返回", len(payload["templates"]) == 12, str(len(payload["templates"])))
+    expected_templates = {
+        "mimo_v2_5",
+        "mimo_v2_5_voicedesign",
+        "mimo_v2_5_voiceclone",
+        "openai_compat",
+        "openai_clone",
+        "volcengine",
+        "aliyun",
+        "azure",
+        "elevenlabs",
+        "custom_http",
+        "unsloth_music",
+        "unsloth_image",
+    }
+    check(
+        "原有引擎模板全部保留",
+        expected_templates <= set(payload["templates"]),
+        str(sorted(payload["templates"])),
+    )
 
     print("\n[3] 字段类型转换")
     check("int 转换", inst._coerce_field("30", "int", 0) == 30)
@@ -662,8 +686,23 @@ def main():
     check("读取成功", res.get("__ok__") is True, str(res)[:160])
     payload = res.get("data") or {}
     fields = {f["key"]: f for f in payload.get("fields", [])}
-    check("返回 11 个字段", len(fields) == 11, str(sorted(fields)))
+    check("返回 16 个字段", len(fields) == 16, str(sorted(fields)))
     check("含智能跳过字段", "tts_skip_code_blocks" in fields and "tts_skip_patterns" in fields)
+    check(
+        "含用户意图跳过字段",
+        "tts_skip_user_intent_patterns" in fields,
+        str(sorted(fields)),
+    )
+    check(
+        "含音乐自动路由字段",
+        "music_auto_route" in fields and "music_route_patterns" in fields,
+        str(sorted(fields)),
+    )
+    check(
+        "含图片自动路由字段",
+        "image_auto_route" in fields and "image_route_patterns" in fields,
+        str(sorted(fields)),
+    )
     check("不含 engines", "engines" not in fields)
     check("不含 active_engine", "active_engine" not in fields)
     check("不含 voice_clone_samples", "voice_clone_samples" not in fields)
@@ -1055,6 +1094,41 @@ def main():
     check("schema 默认值正确",
           schema["tts_skip_code_blocks"].get("default") is True
           and schema["tts_skip_patterns"].get("default") == [])
+    check("schema 含用户意图字段", "tts_skip_user_intent_patterns" in schema)
+    check(
+        "用户意图默认规则一致",
+        schema["tts_skip_user_intent_patterns"].get("default")
+        == module.DEFAULT_USER_INTENT_PATTERNS,
+    )
+
+    # 用户意图规则：匹配用户消息，而不是机器人回复
+    inst.config.pop("tts_skip_user_intent_patterns", None)
+    check(
+        "意图-介绍命中",
+        inst._should_skip_user_intent("介绍一下 Python") != "",
+    )
+    check(
+        "意图-名称命中",
+        inst._should_skip_user_intent("这个人的名字是什么") != "",
+    )
+    check(
+        "意图-步骤命中",
+        inst._should_skip_user_intent("配置步骤是什么") != "",
+    )
+    check(
+        "意图-闲聊不命中",
+        inst._should_skip_user_intent("你今天怎么样") == "",
+        inst._should_skip_user_intent("你今天怎么样"),
+    )
+    check("意图-空消息不命中", inst._should_skip_user_intent("") == "")
+    inst.config["tts_skip_user_intent_patterns"] = [r"^问："]
+    check("意图-自定义命中", inst._should_skip_user_intent("问：怎么退款") != "")
+    check("意图-自定义不误伤", inst._should_skip_user_intent("今天吃什么") == "")
+    inst.config.pop("tts_skip_user_intent_patterns", None)
+    check(
+        "TTS 钩子接入用户意图",
+        "_should_skip_user_intent" in inspect.getsource(inst.tts_hook),
+    )
 
     print("\n[35] 绑定导出导入")
     DISABLED = module.DISABLED_ENGINE
@@ -1322,6 +1396,291 @@ def main():
     V25 = _pkg.MiMoV25Engine
     check("注册表已移除 mimo_v2", "mimo_v2" not in _pkg.ENGINE_REGISTRY)
 
+    # OpenAI 兼容克隆引擎：模板、注册表、参数校验与请求体
+    Clone = _pkg.OpenAICloneEngine
+    check(
+        "openai_clone 已注册",
+        _pkg.ENGINE_REGISTRY.get("openai_clone") is Clone,
+        str(sorted(_pkg.ENGINE_REGISTRY)),
+    )
+    check("openai_clone 模板已入 schema", "openai_clone" in inst._engine_templates())
+    check(
+        "openai_clone 模板字段完整",
+        {"api_base", "model", "mode", "transcript", "instructions", "language", "seed", "voice_id", "voice_sample_name"}
+        <= set(inst._engine_templates()["openai_clone"]["items"]),
+    )
+    try:
+        Clone({"api_key": ""})
+        check("openai_clone 缺 api_key 应报错", False)
+    except ValueError:
+        check("openai_clone 缺 api_key 应报错", True)
+    clone = Clone(
+        {
+            "api_key": "k",
+            "api_base": "http://127.0.0.1:8888/v1/",
+            "model": "audio-cpp/audio.cpp-gguf/CosyVoice3-GGUF",
+            "speed": 1.0,
+            "format": "mp3",
+        }
+    )
+    check("api_base 去除尾部斜杠", clone.api_base == "http://127.0.0.1:8888/v1")
+    check("缓存键稳定", clone._cache_key_for(b"abc") == clone._cache_key_for(b"abc"))
+    check("缓存键随样本变化", clone._cache_key_for(b"abc") != clone._cache_key_for(b"abd"))
+    payload = clone._build_speech_payload("你好", "voice-1")
+    check(
+        "speech 请求体正确",
+        payload
+        == {
+            "input": "你好",
+            "voice": "voice-1",
+            "response_format": "mp3",
+            "model": "audio-cpp/audio.cpp-gguf/CosyVoice3-GGUF",
+        },
+        str(payload),
+    )
+    clone_speed = Clone({"api_key": "k", "speed": 1.2, "format": "wav"})
+    check("非默认语速才发送", clone_speed._build_speech_payload("x", "v").get("speed") == 1.2)
+    check(
+        "空模型不发送",
+        "model" not in Clone({"api_key": "k"})._build_speech_payload("x", "v"),
+    )
+    check(
+        "填写的模型原样发送",
+        Clone({"api_key": "k", "model": "  my-model  "})
+        ._build_speech_payload("x", "v")
+        .get("model")
+        == "my-model",
+    )
+    same = Clone({"api_key": "k", "transcript": "参考原话"})
+    same_payload = same._build_speech_payload("x", "v")
+    check("Same language 发送转写", same_payload.get("reference_text") == "参考原话")
+    check("Same language 不传 template_name", "audio_options" not in same_payload)
+    cross = Clone(
+        {"api_key": "k", "mode": "Cross-lingual", "transcript": "参考原话"}
+    )
+    cross_payload = cross._build_speech_payload("x", "v")
+    check("Cross-lingual 清空转写", cross_payload.get("reference_text") == "", str(cross_payload))
+    check(
+        "Cross-lingual 传 template_name",
+        cross_payload.get("audio_options") == {"template_name": "cross_lingual"},
+        str(cross_payload),
+    )
+    instruct = Clone(
+        {
+            "api_key": "k",
+            "mode": "Instruct",
+            "transcript": "参考原话",
+            "instructions": "用四川话说这句话",
+        }
+    )
+    instruct_payload = instruct._build_speech_payload("x", "v")
+    check(
+        "Instruct 传 template_name",
+        instruct_payload.get("audio_options") == {"template_name": "instruct"},
+        str(instruct_payload),
+    )
+    check(
+        "Instruct 发送指令",
+        instruct_payload.get("instructions") == "用四川话说这句话",
+        str(instruct_payload),
+    )
+    check(
+        "Instruct 仍发送转写",
+        instruct_payload.get("reference_text") == "参考原话",
+        str(instruct_payload),
+    )
+    instruct_empty = Clone({"api_key": "k", "mode": "Instruct"})
+    check(
+        "Instruct 无指令时不发送",
+        "instructions" not in instruct_empty._build_speech_payload("x", "v"),
+    )
+    none_mode = Clone(
+        {
+            "api_key": "k",
+            "mode": "None",
+            "transcript": "参考原话",
+            "instructions": "用四川话说",
+        }
+    )
+    none_payload = none_mode._build_speech_payload("x", "v")
+    check("None 保留音色参考", none_payload.get("voice") == "v")
+    check("None 不发送转写", "reference_text" not in none_payload, str(none_payload))
+    check(
+        "None 不发送模板和指令",
+        "audio_options" not in none_payload and "instructions" not in none_payload,
+        str(none_payload),
+    )
+    check("auto 语言不发送", "language" not in clone._build_speech_payload("x", "v"))
+    clone_lang = Clone({"api_key": "k", "language": "Japanese"})
+    check(
+        "指定语言会发送",
+        clone_lang._build_speech_payload("x", "v").get("language") == "Japanese",
+    )
+    clone_lang_auto = Clone({"api_key": "k", "language": "auto"})
+    check(
+        "语言 auto 不发送",
+        "language" not in clone_lang_auto._build_speech_payload("x", "v"),
+    )
+    check("默认不发送 seed", "seed" not in clone._build_speech_payload("x", "v"))
+    clone_seed = Clone({"api_key": "k", "seed": "12345"})
+    check(
+        "指定 seed 会发送且为整数",
+        clone_seed._build_speech_payload("x", "v").get("seed") == 12345,
+        str(clone_seed._build_speech_payload("x", "v")),
+    )
+    clone_seed_zero = Clone({"api_key": "k", "seed": "0"})
+    check("seed 0 是有效值", clone_seed_zero._build_speech_payload("x", "v").get("seed") == 0)
+    check("seed 空白视为未设置", Clone({"api_key": "k", "seed": "  "}).seed is None)
+    try:
+        Clone({"api_key": "k", "seed": "abc"})
+        check("非法 seed 应报错", False)
+    except ValueError:
+        check("非法 seed 应报错", True)
+
+    # 用 MockTransport 跑完整的 inputs → voices → speech，并验证缓存复用
+    sample = Path("clone_sample.wav").resolve()
+    sample.write_bytes(b"RIFF-sample-bytes")
+    uploaded, created, spoken = [], [], []
+
+    def _clone_handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/audio/inputs"):
+            uploaded.append((request.url.params.get("name"), request.content))
+            return httpx.Response(201, json={"id": "input-1"})
+        if path.endswith("/audio/voices"):
+            created.append(json.loads(request.content))
+            return httpx.Response(201, json={"id": "voice-1"})
+        if path.endswith("/audio/speech"):
+            spoken.append(json.loads(request.content))
+            return httpx.Response(200, content=b"MP3DATA")
+        return httpx.Response(404)
+
+    clone = Clone(
+        {
+            "api_key": "k",
+            "model": "cosy",
+            "transcript": "样本原话",
+            "format": "mp3",
+        },
+        {"voice_clone_samples": [str(sample)]},
+    )
+    clone._client = httpx.AsyncClient(transport=httpx.MockTransport(_clone_handler))
+
+    progress_stages = []
+
+    async def _run_clone():
+        await clone.prepare_voice(progress_stages.append)
+        first = await clone.synthesize("你好")
+        second = await clone.synthesize("第二句")
+        await clone.close()
+        return first, second
+
+    (audio, fmt), _ = asyncio.run(_run_clone())
+    check("克隆合成返回音频", (audio, fmt) == (b"MP3DATA", "mp3"), f"{audio!r} {fmt!r}")
+    check("上传了样本且文件名正确", uploaded[0][0] == "clone_sample.wav", str(uploaded[0][0]))
+    check("上传内容为样本原始字节", uploaded[0][1] == b"RIFF-sample-bytes")
+    check(
+        "创建音色请求正确",
+        created[0] == {
+            "name": "clone_sample",
+            "source": {"input_id": "input-1"},
+            "transcript": "样本原话",
+        },
+        str(created[0]),
+    )
+    check(
+        "合成请求使用创建的 voice id",
+        spoken[0] == {
+            "input": "你好",
+            "voice": "voice-1",
+            "response_format": "mp3",
+            "model": "cosy",
+            "reference_text": "样本原话",
+        },
+        str(spoken[0]),
+    )
+    check(
+        "预注册上报进度",
+        "uploading" in progress_stages and "creating" in progress_stages,
+        str(progress_stages),
+    )
+    check("第二次合成复用音色", (len(uploaded), len(created)) == (1, 1), f"{len(uploaded)},{len(created)}")
+    check("第二次合成不再重复创建", spoken[1]["voice"] == "voice-1")
+    cache_file = Clone.DEFAULT_DATA_DIR / Clone.CACHE_FILE_NAME
+    check("音色缓存已落盘", cache_file.exists())
+    check("音色缓存含 voice id", "voice-1" in cache_file.read_text(encoding="utf-8"))
+
+    # 服务端音色失效（400 提示 clone）时自动重建一次
+    sample2 = Path("clone_sample_2.wav").resolve()
+    sample2.write_bytes(b"RIFF-sample-2")
+    uploaded2, created2, spoken2 = [], [], []
+
+    def _retry_handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/audio/inputs"):
+            uploaded2.append(request.content)
+            return httpx.Response(201, json={"id": f"input-{len(uploaded2)}"})
+        if path.endswith("/audio/voices"):
+            created2.append(json.loads(request.content))
+            return httpx.Response(201, json={"id": f"voice-{len(created2)}"})
+        if path.endswith("/audio/speech"):
+            spoken2.append(json.loads(request.content))
+            if len(spoken2) == 1:
+                return httpx.Response(
+                    400,
+                    json={"error": {"message": "CosyVoice3 speaks in a voice cloned from a recording."}},
+                )
+            return httpx.Response(200, content=b"MP3DATA")
+        return httpx.Response(404)
+
+    retry_clone = Clone(
+        {"api_key": "k", "format": "mp3"},
+        {"voice_clone_samples": [str(sample2)]},
+    )
+    retry_clone._client = httpx.AsyncClient(transport=httpx.MockTransport(_retry_handler))
+
+    async def _run_retry():
+        result = await retry_clone.synthesize("重试")
+        await retry_clone.close()
+        return result
+
+    audio, _ = asyncio.run(_run_retry())
+    check("音色失效后自动重建成功", audio == b"MP3DATA")
+    check("音色失效后重新上传", len(uploaded2) == 2, str(len(uploaded2)))
+    check("音色失效后重新创建", len(created2) == 2, str(len(created2)))
+    check("音色名取样本文件名", created2[0]["name"] == "clone_sample_2", str(created2[0]))
+    check("重试使用新 voice id", spoken2[-1]["voice"] == "voice-2", str(spoken2[-1]))
+    asyncio.run(retry_clone.close())
+
+    # 读取服务端已有音色
+    list_engine = Clone({"api_key": "k"})
+
+    def _voices_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/audio/voices"):
+            return httpx.Response(
+                200,
+                json={
+                    "voices": [
+                        {"id": "voice-a", "name": "Me", "duration_s": 3.2},
+                        {"id": "voice-b", "name": "Other"},
+                        {"name": "missing-id"},
+                    ]
+                },
+            )
+        return httpx.Response(404)
+
+    list_engine._client = httpx.AsyncClient(transport=httpx.MockTransport(_voices_handler))
+
+    async def _run_list_voices():
+        result = await list_engine.list_voices()
+        await list_engine.close()
+        return result
+
+    listed = asyncio.run(_run_list_voices())
+    check("音色列表解析", [v["id"] for v in listed] == ["voice-a", "voice-b"], str(listed))
+    check("音色列表保留名称", listed[0]["name"] == "Me", str(listed[0]))
+    check("音色列表跳过缺 id 项", len(listed) == 2, str(listed))
+
     def _prefix(style="", singing=False, text="月亮代表我的心"):
         e = V25({"api_key": "k", "style": style, "singing_mode": singing})
         payload = e._build_payload(text)
@@ -1354,6 +1713,583 @@ def main():
           payload["messages"][0] == {"role": "user", "content": "用温柔的语气"})
     check("audio 结构正确", payload["audio"] == {"format": "wav", "voice": "mimo_default"})
     check("模型默认 v2.5", payload["model"] == "mimo-v2.5-tts")
+
+    print("\n[39] 读取已有音色接口")
+
+    class _VoiceEngine:
+        async def list_voices(self):
+            return [{"id": "voice-a", "name": "Me"}]
+
+        async def close(self):
+            pass
+
+    class _NoVoiceEngine:
+        async def close(self):
+            pass
+
+    original_get_engine = module.get_engine
+    module.get_engine = lambda cfg, conf=None: _VoiceEngine()
+    web.request.payload = {
+        "engine": {
+            "__template_key": "openai_clone",
+            "api_key": "k",
+            "api_base": "http://127.0.0.1:8888/v1",
+        }
+    }
+    res = asyncio.run(inst.web_list_engine_voices())
+    check("读取音色成功", res.get("__ok__") is True, str(res)[:160])
+    check(
+        "返回音色列表",
+        (res.get("data") or {}).get("voices") == [{"id": "voice-a", "name": "Me"}],
+        str(res)[:160],
+    )
+
+    module.get_engine = lambda cfg, conf=None: _NoVoiceEngine()
+    res = asyncio.run(inst.web_list_engine_voices())
+    check("不支持时返回错误", res.get("__ok__") is False, str(res)[:160])
+    module.get_engine = original_get_engine
+
+    print("\n[40] 保存时预注册音色与进度")
+
+    class _ProgressEngine:
+        def __init__(self, cfg, conf=None):
+            self.instance_name = str(cfg.get("instance_name") or "")
+
+        async def prepare_voice(self, progress=None):
+            if progress:
+                progress("uploading")
+                progress("creating")
+                progress("done")
+            return "voice-pre"
+
+        async def close(self):
+            pass
+
+    original_get_engine = module.get_engine
+    module.get_engine = lambda cfg, conf=None: _ProgressEngine(cfg, conf)
+
+    async def _run_save(name):
+        web.request.payload = {
+            "engine": {
+                "__template_key": "openai_clone",
+                "instance_name": name,
+                "api_key": "k",
+                "api_base": "http://127.0.0.1:8888/v1",
+            }
+        }
+        started = await inst.web_save_engine()
+        if not started.get("__ok__"):
+            return started
+        job_id = (started.get("data") or {}).get("job_id")
+        if not job_id:
+            return {"__ok__": False, "error": "没有返回 job_id"}
+        last = None
+        for _ in range(300):
+            web.request.query = {"job_id": job_id}
+            last = await inst.web_save_result()
+            status = (last.get("data") or {}).get("status")
+            if status not in ("pending", "running"):
+                return last
+            await asyncio.sleep(0.01)
+        return last or {"__ok__": False, "error": "超时"}
+
+    res = asyncio.run(_run_save("预注册测试"))
+    data = res.get("data") or {}
+    check("保存任务完成", data.get("status") == "done", str(res)[:200])
+    check("保存进度到 100", data.get("progress") == 100, str(data.get("progress")))
+    payload = data.get("data") or {}
+    check(
+        "预注册后引擎已保存",
+        any(
+            e.get("instance_name") == "预注册测试"
+            for e in payload.get("engines", [])
+        ),
+        str(payload.get("engines"))[:200],
+    )
+
+    class _FailEngine(_ProgressEngine):
+        async def prepare_voice(self, progress=None):
+            raise RuntimeError("upload failed")
+
+    module.get_engine = lambda cfg, conf=None: _FailEngine(cfg, conf)
+    res = asyncio.run(_run_save("预注册失败测试"))
+    data = res.get("data") or {}
+    check("预注册失败任务报错", data.get("status") == "error", str(res)[:200])
+    check(
+        "失败原因可见",
+        "upload failed" in (data.get("error") or ""),
+        str(data.get("error")),
+    )
+    check(
+        "失败时不保存引擎",
+        not any(
+            e.get("instance_name") == "预注册失败测试"
+            for e in inst.config.get("engines", [])
+        ),
+    )
+    module.get_engine = original_get_engine
+    web.request.query = {}
+
+    print("\n[41] Unsloth 歌曲引擎")
+
+    Music = _pkg.UnslothMusicEngine
+    check("unsloth_music 已注册", _pkg.ENGINE_REGISTRY.get("unsloth_music") is Music)
+    check("unsloth_music 模板已入 schema", "unsloth_music" in inst._engine_templates())
+    music_items = set(inst._engine_templates()["unsloth_music"]["items"])
+    check(
+        "unsloth_music 模板字段完整",
+        {"api_base", "model", "duration", "require_marker"} <= music_items,
+        str(sorted(music_items)),
+    )
+    check(
+        "音乐模板已移除无效字段",
+        not (
+            {"chat_model", "chat_prompt", "chat_timeout", "style_prompt", "lyrics"}
+            & music_items
+        ),
+        str(sorted(music_items)),
+    )
+    check("注册音乐钩子", hasattr(inst, "music_hook"))
+    check(
+        "音乐钩子优先于 TTS",
+        "priority=1" in inspect.getsource(inst.music_hook),
+    )
+    check(
+        "TTS 钩子不再误标音乐结果",
+        "_should_route_to_music" not in inspect.getsource(inst.tts_hook),
+    )
+    check(
+        "TTS 钩子按模式互斥",
+        "_decide_reply_mode" in inspect.getsource(inst.tts_hook),
+    )
+    check(
+        "音乐钩子使用用户输入",
+        "message_str" in inspect.getsource(inst.music_hook),
+    )
+    check(
+        "音乐钩子按模式互斥",
+        "_decide_reply_mode" in inspect.getsource(inst.music_hook),
+    )
+    check(
+        "TTS 钩子排除音乐引擎",
+        "allow_special=False" in inspect.getsource(inst.tts_hook),
+    )
+
+    inst.config["music_auto_route"] = True
+    check(
+        "音乐路由-生成配乐",
+        inst._should_route_to_music("帮我生成一段有乡村烟火气的奏乐", "") is True,
+    )
+    check(
+        "音乐路由-写歌",
+        inst._should_route_to_music("写一首关于城市的歌", "") is True,
+    )
+    check(
+        "音乐路由-普通对话",
+        inst._should_route_to_music("今天天气不错", "") is False,
+    )
+    check(
+        "音乐路由-标记",
+        inst._should_route_to_music("你好", "[[MUSIC]]") is True,
+    )
+    inst.config["music_auto_route"] = False
+    check(
+        "音乐路由-关闭后不匹配",
+        inst._should_route_to_music("写一首歌", "[[MUSIC]]") is False,
+    )
+    inst.config["music_auto_route"] = True
+
+    check(
+        "模式-音乐",
+        inst._decide_reply_mode("sid", "写一首歌", "") == "music",
+    )
+    check(
+        "模式-普通",
+        inst._decide_reply_mode("sid", "今天天气不错", "") == "tts",
+    )
+    check(
+        "模式-标记",
+        inst._decide_reply_mode("sid", "你好", "[[MUSIC]]") == "music",
+    )
+    inst._session_bindings["sid"] = module.DISABLED_ENGINE
+    check(
+        "模式-禁音",
+        inst._decide_reply_mode("sid", "写一首歌", "") == "none",
+    )
+    inst._session_bindings.pop("sid", None)
+
+    payload_music = inst._build_engines_payload()
+    check(
+        "普通引擎 is_music False",
+        all(not e.get("is_music") for e in payload_music["engines"]),
+    )
+    cfg_music = _Config(
+        {
+            "enable": True,
+            "engines": [
+                {
+                    "instance_name": "music",
+                    "__template_key": "unsloth_music",
+                    "api_key": "k",
+                }
+            ],
+        }
+    )
+    inst_music = cls(_Context(), cfg_music)
+    payload_music2 = inst_music._build_engines_payload()
+    check(
+        "音乐引擎 is_music True",
+        payload_music2["engines"][0].get("is_music") is True,
+    )
+
+    music = Music(
+        {
+            "instance_name": "music",
+            "api_key": "k",
+            "api_base": "http://127.0.0.1:8888/",
+            "model": "audio-cpp/audio.cpp-gguf/Stable-Audio-3-Small-Music-GGUF",
+            "duration": 30,
+        }
+    )
+    check("音乐 api_base 去尾斜杠", music.api_base == "http://127.0.0.1:8888")
+    check("音乐默认要求标记", music.require_marker is True)
+    check("音乐有标记", music.has_marker("[[MUSIC]] {}"))
+    check("音乐无标记", not music.has_marker("普通文本"))
+    check(
+        "音乐固定 chat 模型",
+        music.chat_model
+        == "HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive:Q6_K",
+        music.chat_model,
+    )
+    check("音乐支持试听方法", hasattr(music, "synthesize_preview"))
+
+    music_v1 = Music(
+        {
+            "instance_name": "music-v1",
+            "api_key": "k",
+            "api_base": "http://192.168.10.2:8908/v1",
+        }
+    )
+    check("音乐 api_base 去 /v1", music_v1.api_base == "http://192.168.10.2:8908")
+
+    requests = []
+
+    def _music_handler(request: httpx.Request) -> httpx.Response:
+        requests.append(
+            (
+                request.method,
+                request.url.path,
+                request.headers.get("authorization"),
+                request.content,
+            )
+        )
+        if request.url.path == "/v1/chat/completions":
+            content = json.dumps(
+                {
+                    "style": "generated synth pop",
+                    "lyrics": "[verse]\nGenerated line",
+                },
+                ensure_ascii=False,
+            )
+            return httpx.Response(
+                200, json={"choices": [{"message": {"content": content}}]}
+            )
+        if request.url.path == "/v1/audio/run":
+            return httpx.Response(
+                200,
+                json={
+                    "clips": [
+                        {
+                            "id": "clip-1",
+                            "url": "/v1/audio/gallery/clip-1/file",
+                        }
+                    ]
+                },
+            )
+        if request.url.path == "/v1/audio/gallery/clip-1/file":
+            return httpx.Response(200, content=b"WAVDATA")
+        return httpx.Response(404)
+
+    music._client = httpx.AsyncClient(transport=httpx.MockTransport(_music_handler))
+
+    async def _run_music():
+        result = await music.synthesize("帮我写一首关于城市夜晚的流行歌")
+        await music.close()
+        return result
+
+    audio, fmt = asyncio.run(_run_music())
+    check("音乐合成返回音频", (audio, fmt) == (b"WAVDATA", "wav"), f"{audio!r} {fmt!r}")
+    check(
+        "先调用 chat 模型",
+        requests[0][1] == "/v1/chat/completions",
+        str([r[1] for r in requests]),
+    )
+    chat_body = json.loads(requests[0][3])
+    check("chat 使用固定模型", chat_body.get("model") == music.chat_model, str(chat_body))
+    check("chat 使用用户输入", "城市夜晚" in str(chat_body), str(chat_body))
+    run_body = json.loads(requests[1][3])
+    check(
+        "音乐使用 chat 生成的风格",
+        run_body.get("text") == "generated synth pop",
+        str(run_body),
+    )
+    check(
+        "音乐使用 chat 生成的歌词",
+        run_body.get("lyrics") == "[verse]\nGenerated line",
+        str(run_body),
+    )
+    check("音乐请求 workflow", run_body.get("workflow") == "music", str(run_body))
+    check("音乐请求 mode", run_body.get("mode") == "song", str(run_body))
+    check("音乐请求带 Bearer", requests[1][2] == "Bearer k", str(requests[1][:3]))
+    check("音乐下载带 Bearer", requests[2][2] == "Bearer k", str(requests[2][:3]))
+
+    preview_requests = []
+
+    def _preview_handler(request: httpx.Request) -> httpx.Response:
+        preview_requests.append((request.url.path, request.content))
+        if request.url.path == "/v1/audio/run":
+            return httpx.Response(
+                200,
+                json={
+                    "clips": [
+                        {
+                            "id": "clip-p",
+                            "url": "/v1/audio/gallery/clip-p/file",
+                        }
+                    ]
+                },
+            )
+        if request.url.path == "/v1/audio/gallery/clip-p/file":
+            return httpx.Response(200, content=b"PREVIEWDATA")
+        return httpx.Response(404)
+
+    preview_music = Music({"instance_name": "preview-music", "api_key": "k"})
+    preview_music._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(_preview_handler)
+    )
+
+    async def _run_preview_music():
+        result = await preview_music.synthesize_preview()
+        await preview_music.close()
+        return result
+
+    preview_audio, preview_fmt = asyncio.run(_run_preview_music())
+    check("音乐试听返回音频", (preview_audio, preview_fmt) == (b"PREVIEWDATA", "wav"))
+    check(
+        "音乐试听不调用 chat",
+        all(path != "/v1/chat/completions" for path, _ in preview_requests),
+        str([p for p, _ in preview_requests]),
+    )
+    preview_body = json.loads(preview_requests[0][1])
+    check(
+        "音乐试听写死风格",
+        preview_body.get("text") == "short ambient instrumental test",
+        str(preview_body),
+    )
+    check("音乐试听时长 5 秒", preview_body.get("duration_s") == 5.0, str(preview_body))
+    check("音乐试听器乐", preview_body.get("instrumental") is True, str(preview_body))
+    check(
+        "音乐试听文本为短样本",
+        module.PREVIEW_MUSIC_TEXT == "short ambient instrumental test",
+    )
+    check("音乐试听超时更宽", module.PREVIEW_MUSIC_TIMEOUT > module.PREVIEW_TIMEOUT)
+    check("非音乐试听仍用原文本", module.PREVIEW_TEXT == "你好，这是一段音色试听。")
+    check("非音乐试听超时仍是 60", module.PREVIEW_TIMEOUT == 60)
+    for engine_name in ("MiMoV25Engine", "OpenAICompatEngine", "CustomHTTPEngine"):
+        engine_cls = getattr(_pkg, engine_name)
+        check(
+            f"{engine_name} 不是音乐引擎",
+            not getattr(engine_cls, "is_music", False),
+        )
+
+    print("\n[42] Unsloth 图片引擎")
+
+    Image = _pkg.UnslothImageEngine
+    check("unsloth_image 已注册", _pkg.ENGINE_REGISTRY.get("unsloth_image") is Image)
+    check("unsloth_image 模板已入 schema", "unsloth_image" in inst._engine_templates())
+    image_items = set(inst._engine_templates()["unsloth_image"]["items"])
+    check(
+        "unsloth_image 模板字段完整",
+        {"api_base", "model", "size", "timeout"} <= image_items,
+        str(sorted(image_items)),
+    )
+    check("注册图片钩子", hasattr(inst, "image_hook"))
+    check(
+        "图片钩子优先于 TTS",
+        "priority=1" in inspect.getsource(inst.image_hook),
+    )
+    check(
+        "图片钩子按模式互斥",
+        "_decide_reply_mode" in inspect.getsource(inst.image_hook),
+    )
+    check(
+        "图片试听已接入",
+        "media_type" in inspect.getsource(inst._run_preview_job)
+        and "PREVIEW_IMAGE_TEXT" in inspect.getsource(inst._run_preview_job),
+    )
+
+    class _FakeImageEngine:
+        is_image = True
+        instance_name = "image-preview"
+
+        async def synthesize(self, text):
+            return b"PNGDATA", "png"
+
+        async def close(self):
+            pass
+
+    original_get_engine = module.get_engine
+    module.get_engine = lambda cfg, conf=None: _FakeImageEngine()
+    image_job_id = "image-preview-job"
+    inst._preview_jobs[image_job_id] = {
+        "status": "pending",
+        "created": module.time.time(),
+    }
+    asyncio.run(
+        inst._run_preview_job(
+            image_job_id,
+            {"__template_key": "unsloth_image", "api_key": "k"},
+        )
+    )
+    image_job = inst._preview_jobs.get(image_job_id) or {}
+    check("图片试听任务完成", image_job.get("status") == "done", str(image_job))
+    check(
+        "图片试听 media_type",
+        image_job.get("media_type") == "image",
+        str(image_job),
+    )
+    check(
+        "图片试听 data URI",
+        str(image_job.get("audio", "")).startswith("data:image/png;base64,"),
+        str(image_job.get("audio", ""))[:80],
+    )
+    check("图片试听可播放", image_job.get("playable") is True, str(image_job))
+    inst._preview_jobs.pop(image_job_id, None)
+    module.get_engine = original_get_engine
+
+    image = Image(
+        {
+            "instance_name": "image",
+            "api_key": "k",
+            "api_base": "http://192.168.10.2:8908/v1",
+            "model": "unsloth/FLUX.2-klein-4B-GGUF",
+            "size": "1024x1024",
+        }
+    )
+    check("图片 api_base 去 /v1", image.api_base == "http://192.168.10.2:8908")
+    check("图片默认模型", image.model == "unsloth/FLUX.2-klein-4B-GGUF")
+    check("图片默认尺寸", image.size == "1024x1024")
+    check("图片 is_image", getattr(image, "is_image", False) is True)
+    check("图片尺寸-显式", image._parse_size("生成 768x512 的图") == "768x512")
+    check("图片尺寸-16:9", image._parse_size("画一张 16:9 的海报") == "1024x576")
+    check("图片尺寸-竖图", image._parse_size("来一张竖图") == "576x1024")
+    check("图片尺寸-默认", image._parse_size("画一只猫") == "1024x1024")
+
+    image_requests = []
+
+    def _image_handler(request: httpx.Request) -> httpx.Response:
+        image_requests.append(
+            (
+                request.method,
+                request.url.path,
+                request.headers.get("authorization"),
+                request.content,
+            )
+        )
+        if request.url.path == "/v1/images/generations":
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "b64_json": base64.b64encode(b"PNGDATA").decode(
+                                "ascii"
+                            )
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(404)
+
+    image._client = httpx.AsyncClient(transport=httpx.MockTransport(_image_handler))
+
+    async def _run_image():
+        result = await image.synthesize("画一张 16:9 的海报")
+        await image.close()
+        return result
+
+    image_bytes, image_fmt = asyncio.run(_run_image())
+    check("图片合成返回 png", (image_bytes, image_fmt) == (b"PNGDATA", "png"))
+    check(
+        "图片请求路径",
+        image_requests[0][1] == "/v1/images/generations",
+        str(image_requests[0][:3]),
+    )
+    check("图片请求带 Bearer", image_requests[0][2] == "Bearer k")
+    image_body = json.loads(image_requests[0][3])
+    check(
+        "图片请求模型",
+        image_body.get("model") == "unsloth/FLUX.2-klein-4B-GGUF",
+        str(image_body),
+    )
+    check("图片请求尺寸", image_body.get("size") == "1024x576", str(image_body))
+    check(
+        "图片请求 b64_json",
+        image_body.get("response_format") == "b64_json",
+        str(image_body),
+    )
+    check(
+        "图片请求 prompt",
+        image_body.get("prompt") == "画一张 16:9 的海报",
+        str(image_body),
+    )
+
+    inst.config["image_auto_route"] = True
+    check(
+        "图片路由-画图",
+        inst._should_route_to_image("帮我画一张猫的图片", "") is True,
+    )
+    check(
+        "图片路由-普通对话",
+        inst._should_route_to_image("今天天气不错", "") is False,
+    )
+    check(
+        "图片路由-标记",
+        inst._should_route_to_image("你好", "[[IMAGE]]") is True,
+    )
+    inst.config["image_auto_route"] = False
+    check(
+        "图片路由-关闭后不匹配",
+        inst._should_route_to_image("画一张图", "[[IMAGE]]") is False,
+    )
+    inst.config["image_auto_route"] = True
+    check(
+        "模式-图片",
+        inst._decide_reply_mode("sid", "画一张图", "") == "image",
+    )
+
+    cfg_image = _Config(
+        {
+            "enable": True,
+            "engines": [
+                {
+                    "instance_name": "image",
+                    "__template_key": "unsloth_image",
+                    "api_key": "k",
+                }
+            ],
+        }
+    )
+    inst_image = cls(_Context(), cfg_image)
+    image_payload = inst_image._build_engines_payload()
+    check(
+        "图片引擎 is_image True",
+        image_payload["engines"][0].get("is_image") is True,
+    )
+    check(
+        "图片引擎 is_music False",
+        image_payload["engines"][0].get("is_music") is False,
+    )
 
     print()
     if failures:

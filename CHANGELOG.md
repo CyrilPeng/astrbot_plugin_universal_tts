@@ -1,5 +1,62 @@
 # 更新日志
 
+## 本分支新增（未发布）
+
+新增 OpenAI 兼容的音色克隆引擎，适配 Unsloth Studio / audio.cpp 等两步式语音接口。
+
+### 新增
+
+- **`openai_clone` 引擎**：`POST /audio/inputs` 上传样本 → `POST /audio/voices` 创建保存音色 → `POST /audio/speech` 合成
+  - 首次合成自动完成注册，之后复用 `voice_id`
+  - 保存引擎时预注册音色：编辑页保存即上传样本并创建保存音色，对话框显示上传/创建进度条，首次合成无需等待
+  - 缓存落盘到 `data/plugin_data/astrbot_plugin_universal_tts/openai_clone_voices.json`，重启后优先复用；样本或服务地址变化时自动重建
+  - 保存音色名称默认取样本文件名（如 `me.wav` → `me`），移除 `voice_name` 配置项
+  - 新增 `language` 选项，默认 `auto`（不发送语言提示）；选择具体语言后作为 `language` 参数发送给支持该提示的模型
+  - 新增 `seed` 选项，留空不发送；填写整数时作为 `seed` 参数传入，用于 best-effort 确定性生成
+  - `model` 保持可选：留空时请求体不发送该字段，由服务端使用当前加载的模型；填写后原样传入填写的模型名
+  - 新增克隆模式 `mode`：Same language / Cross-lingual / Instruct / None
+    - Cross-lingual 隐藏样本转写，发送空 `reference_text` 并带 `audio_options.template_name = cross_lingual`
+    - Instruct 显示 Instruction 文本框，发送 `template_name = instruct` 和 `instructions`
+    - Same language 保持原有行为，发送转写但不带 `template_name`
+    - None 为普通生成模式，只保留 `voice` 参考，不发送转写、指令或模板选项
+  - 合成返回音色相关错误（服务端重启/音色被删除）时自动重新上传并创建一次
+  - 支持直接填写已有 `voice_id` 跳过上传；`model` 留空时使用服务端当前加载的模型
+  - WebUI 的 `voice_id` 改为下拉框，自动调用 `GET /audio/voices` 加载服务端音色并按名称展示；留空表示自动创建
+    - 新增 Web API `POST /engines/voices`，同时支持已保存引擎和编辑器草稿
+    - 「读取已有音色」按钮可手动刷新；当前 ID 不在列表中时保留并标注
+- WebUI 新增 `[OpenAI] 兼容克隆（上传样本 → 保存音色 → 合成）` 模板，可与其他引擎一样增删改查、试听和会话绑定
+- **`unsloth_music` 歌曲/音乐引擎**：调用本地 Unsloth Studio `POST /v1/audio/run`
+  - LLM 回复只需要 `[[MUSIC]]` 标记；插件把**用户消息**交给内置 chat 模型生成英文 `style` 和 `lyrics`，再调用 `/v1/audio/run`
+  - 内置 chat 模型固定为 `HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive:Q6_K`，不暴露 chat 提示词/超时/默认歌词等配置项
+  - `api_base` 自动归一化：带不带 `/v1` 都可以，修复填成 OpenAI baseURL 时拼出 `/v1/v1/audio/run` 的 405
+  - 生成结果挂到当前被动回复，群聊不需要主动消息权限
+  - 绕过 TTS 概率、字数上限、智能跳过和用户意图跳过；失败时回复文本提示
+  - **自动内容路由**：新增 `music_auto_route`（默认开启）和 `music_route_patterns`
+    - 用户消息命中 BGM/歌曲需求，或回复带 `[[MUSIC]]` → 自动使用第一个音乐引擎，不需要 `/tts_bind`
+    - 其它回复继续走会话绑定/全局 TTS 引擎；绑定/全局是音乐引擎时，普通对话回退到第一个非音乐引擎
+    - `require_marker` 只在关闭自动路由、手动绑定音乐引擎时生效
+  - 修复钩子顺序：AstrBot 按 priority 从大到小执行，`music_hook` 高于 `tts_hook`，避免 TTS 钩子先把结果标成 GENERAL_RESULT 导致 `[[MUSIC]]` 被当文本发出
+  - **模式互斥**：`_decide_reply_mode` 对一次回复只判定 `music` / `tts` / `none`，两个钩子各自只处理自己的模式，不依赖相对优先级；命中音乐后不会再触发 TTS
+  - WebUI 引擎列表给音乐引擎显示「音乐」徽标
+  - WebUI 试听写死 5 秒短样本的 style/lyrics，不调用 chat，只测试音乐模型
+- **`unsloth_image` 图片生成引擎**：调用本地 Unsloth Studio `POST /v1/images/generations`
+  - 用户消息命中图片需求，或回复带 `[[IMAGE]]` → 自动使用第一个图片引擎
+  - 用户消息作为 prompt；图片生成结果以 `Comp.Image` 挂到当前被动回复
+  - 尺寸：消息里的 `768x512`、`16:9`、`竖图`、`横图`、`方图` 自动覆盖；未指定时用引擎 `size` 配置
+  - 新增 `image_auto_route` / `image_route_patterns`；图片、音乐、TTS 三种模式互斥
+  - `api_base` 自动归一化，默认模型 `unsloth/FLUX.2-klein-4B-GGUF`
+  - WebUI 引擎列表给图片引擎显示「图片」徽标
+  - WebUI 试听会生成一张固定测试图，前端用 `<img>` 展示；不影响聊天里的自动路由
+- **用户意图跳过**：新增 `tts_skip_user_intent_patterns`，匹配**用户消息**而不是机器人回复；命中「介绍 / 名称 / 定义 / 步骤 / 价格 / 地址」等知识型提问时返回文本
+  - 默认包含一组强信息词正则，可在 WebUI「全局设置 → 用户意图跳过规则」中增删
+  - 与 `tts_skip_patterns`（匹配回复文本）互补
+- README 补充文本/语音分流说明
+
+### 说明
+
+- 测试 319 -> 476 项（新增克隆引擎模板、参数校验、完整 `inputs → voices → speech` 流程、缓存复用与失效重建、读取已有音色接口、音色名取样本文件名、生成语言参数、随机种子、模型名可选发送、四种克隆模式、保存时预注册与进度条、用户意图跳过、歌曲引擎与音乐试听、固定 chat 生成歌词/风格、音乐自动路由与引擎徽标、钩子优先级与模式互斥、图片引擎与尺寸解析、图片自动路由与徽标、图片试听、原有引擎兼容性回归）
+- 测试依赖 `httpx`（MockTransport 参与真实引擎类测试）
+
 ## v1.4.5
 
 跟随 MiMo 官方调整：移除已下线的 v2 模板，V2.5 支持唱歌模式。

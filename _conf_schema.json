@@ -36,6 +36,47 @@
     "default": [],
     "hint": "每行一个正则表达式，回复命中任意一条则不转为语音。例如匹配纯数字验证码：^\\d{4,8}$。无效正则会被忽略并在日志中告警。"
   },
+  "tts_skip_user_intent_patterns": {
+    "description": "用户意图跳过规则（正则）",
+    "type": "list",
+    "default": [
+      "(?:请问|介绍一下|解释一下|说明一下|什么是|是什么|是谁|叫什么|名字|名称|全称|简称|别名|英文名|中文名|又名|定义|含义|意思|列出|列举|对比|区别|步骤|教程|攻略|资料|来源|引用|查询|搜索|总结|概括|翻译|价格|多少钱|地址|电话|邮箱|网址|链接|怎么做|怎么用|怎么办|如何做|如何用|如何设置|如何评价|如何选择|在哪里|在哪儿|为什么|为啥)"
+    ],
+    "hint": "匹配用户消息（不是机器人回复）；命中任意一条则返回文本、不转语音。每行一个正则。默认覆盖介绍/解释/名称/定义/步骤/价格/地址等知识型提问。"
+  },
+  "music_auto_route": {
+    "description": "音乐请求自动路由",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，用户消息命中 BGM/歌曲需求或回复带 [[MUSIC]] 时自动使用 [Unsloth] 歌曲/音乐 引擎；普通对话继续走 TTS。"
+  },
+  "music_route_patterns": {
+    "description": "音乐请求匹配规则（正则）",
+    "type": "list",
+    "default": [
+      "(?:生成|写|创作|制作|编|来|做|给我|帮我).*(?:一首|一段|一曲|一个)?\\s*(?:歌|歌曲|音乐|配乐|BGM|bgm|背景音乐|旋律|伴奏|奏乐|主题曲|片头曲|片尾曲)",
+      "(?i)\\b(?:make|create|generate|compose|write|produce)\\b.{0,40}\\b(?:bgm|song|music|soundtrack|instrumental|melody)\\b",
+      "(?i)\\bbgm\\b"
+    ],
+    "hint": "匹配用户消息；命中任意一条即自动使用音乐引擎。每行一个正则。"
+  },
+  "image_auto_route": {
+    "description": "图片请求自动路由",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，用户消息命中画图/图片需求或回复带 [[IMAGE]] 时自动使用 [Unsloth] 图片生成 引擎；普通对话继续走 TTS。"
+  },
+  "image_route_patterns": {
+    "description": "图片请求匹配规则（正则）",
+    "type": "list",
+    "default": [
+      "(?:画|绘制|生成|制作|做|来|给我|帮我).*(?:一张|一幅|一个)?\\s*(?:图片|图像|照片|插画|海报|壁纸|头像|表情包|画|图)",
+      "(?:画一张|画一幅|生成图片|生成图像|做一张图|来张图|来一张图|出图|AI绘画|文生图|画图)",
+      "(?i)\\b(?:draw|paint|generate|create|make)\\b.{0,40}\\b(?:image|picture|photo|illustration|poster|wallpaper|avatar|art)\\b",
+      "(?i)\\b(?:image generation|text-to-image|t2i)\\b"
+    ],
+    "hint": "匹配用户消息；命中任意一条即自动使用图片引擎。每行一个正则。"
+  },
   "fallback_to_text_on_send_error": {
     "description": "语音发送失败时回退为文本",
     "type": "bool",
@@ -326,6 +367,119 @@
           }
         }
       },
+      "openai_clone": {
+        "name": "[OpenAI] 兼容克隆（上传样本 → 保存音色 → 合成）",
+        "hint": "适用于 Unsloth Studio 等提供 /audio/inputs、/audio/voices、/audio/speech 的 OpenAI 兼容服务；首次合成自动上传样本并保存音色",
+        "items": {
+          "instance_name": {
+            "description": "实例名称（用于标识和切换）",
+            "type": "string",
+            "default": "openai_clone"
+          },
+          "api_key": {
+            "description": "API Key",
+            "type": "string",
+            "default": ""
+          },
+          "api_base": {
+            "description": "API Base URL",
+            "type": "string",
+            "default": "http://127.0.0.1:8888/v1",
+            "hint": "填到 /v1 为止，不要带 /audio/speech"
+          },
+          "model": {
+            "description": "模型名称（可选）",
+            "type": "string",
+            "default": "",
+            "hint": "留空则不发送 model，由服务端使用当前加载的模型；填写后原样传入该模型名"
+          },
+          "mode": {
+            "description": "克隆模式",
+            "type": "string",
+            "default": "Same language",
+            "options": [
+              "Same language",
+              "Cross-lingual",
+              "Instruct",
+              "None"
+            ],
+            "hint": "Same language：使用样本转写；Cross-lingual：隐藏并清空转写；Instruct：额外发送 Instruction 指令；None：普通生成模式，只保留音色参考，不发送转写/指令/模板选项"
+          },
+          "transcript": {
+            "description": "样本转写文本",
+            "type": "text",
+            "default": "",
+            "hint": "样本音频里说的原话；Same language / Instruct 模式下使用，Cross-lingual 模式不发送"
+          },
+          "instructions": {
+            "description": "Instruction 指令",
+            "type": "text",
+            "default": "",
+            "hint": "仅 Instruct 模式发送；例如：用四川话说这句话"
+          },
+          "language": {
+            "description": "生成文本语言",
+            "type": "string",
+            "default": "auto",
+            "options": [
+              "auto",
+              "Chinese",
+              "English",
+              "Japanese",
+              "Korean",
+              "German",
+              "French",
+              "Russian",
+              "Portuguese",
+              "Spanish",
+              "Italian"
+            ],
+            "hint": "auto 表示不发送语言提示；模型支持时选择目标语言，会作为 language 参数发送"
+          },
+          "voice_id": {
+            "description": "已有音色（可选）",
+            "type": "string",
+            "default": "",
+            "hint": "下拉选择服务端已保存的音色；留空则自动上传样本创建；「读取已有音色」可手动刷新列表"
+          },
+          "voice_sample_name": {
+            "description": "音色样本文件名",
+            "type": "string",
+            "default": "",
+            "hint": "留空则使用第一个已上传的样本"
+          },
+          "format": {
+            "description": "输出格式",
+            "type": "string",
+            "default": "mp3",
+            "options": [
+              "mp3",
+              "wav",
+              "flac",
+              "opus",
+              "aac",
+              "pcm"
+            ]
+          },
+          "speed": {
+            "description": "语速（0.25-4.0）",
+            "type": "float",
+            "default": 1.0,
+            "hint": "1.0 表示不发送该参数"
+          },
+          "seed": {
+            "description": "随机种子（可选）",
+            "type": "string",
+            "default": "",
+            "hint": "整数；留空则不发送 seed 参数，由服务端随机"
+          },
+          "timeout": {
+            "description": "超时（秒）",
+            "type": "int",
+            "default": 120
+          }
+        }
+      },
       "volcengine": {
         "name": "[火山引擎] TTS（SAMI API）",
         "hint": "需在火山引擎控制台获取 appkey 和 token",
@@ -540,6 +694,88 @@
             "description": "超时（秒）",
             "type": "int",
             "default": 30
+          }
+        }
+      },
+      "unsloth_image": {
+        "name": "[Unsloth] 图片生成（/v1/images/generations）",
+        "hint": "调用本地 Unsloth Studio 图片模型；命中图片请求时自动路由，回复 [[IMAGE]] 或直接描述即可。",
+        "items": {
+          "instance_name": {
+            "description": "实例名称（用于标识和切换）",
+            "type": "string",
+            "default": "unsloth_image"
+          },
+          "api_key": {
+            "description": "API Key",
+            "type": "string",
+            "default": ""
+          },
+          "api_base": {
+            "description": "API Base URL",
+            "type": "string",
+            "default": "http://127.0.0.1:8888",
+            "hint": "Studio 地址；带不带 /v1 都可以，插件会自动归一化"
+          },
+          "model": {
+            "description": "图片模型 ID",
+            "type": "string",
+            "default": "unsloth/FLUX.2-klein-4B-GGUF"
+          },
+          "size": {
+            "description": "默认尺寸",
+            "type": "string",
+            "default": "1024x1024",
+            "hint": "用户消息未指定尺寸时使用；支持 1024x1024、1024x576 等，消息里的 16:9/竖图 也会覆盖"
+          },
+          "timeout": {
+            "description": "超时（秒）",
+            "type": "int",
+            "default": 300
+          }
+        }
+      },
+      "unsloth_music": {
+        "name": "[Unsloth] 歌曲/音乐（/v1/audio/run）",
+        "hint": "调用本地 Unsloth Studio：先用内置 chat 模型根据用户输入生成 style/lyrics，再调用 /v1/audio/run 生成歌曲，挂到当前被动回复。",
+        "items": {
+          "instance_name": {
+            "description": "实例名称（用于标识和切换）",
+            "type": "string",
+            "default": "unsloth_music"
+          },
+          "api_key": {
+            "description": "API Key",
+            "type": "string",
+            "default": ""
+          },
+          "api_base": {
+            "description": "API Base URL",
+            "type": "string",
+            "default": "http://127.0.0.1:8888",
+            "hint": "Studio 地址；带不带 /v1 都可以，插件会自动归一化"
+          },
+          "model": {
+            "description": "音乐模型 ID",
+            "type": "string",
+            "default": "",
+            "hint": "留空则使用 Studio 当前加载的模型；例如 audio-cpp/audio.cpp-gguf/Stable-Audio-3-Small-Music-GGUF"
+          },
+          "duration": {
+            "description": "默认时长（秒）",
+            "type": "int",
+            "default": 30
+          },
+          "require_marker": {
+            "description": "需要 [[MUSIC]] 标记",
+            "type": "bool",
+            "default": true,
+            "hint": "开启后只有回复里带 [[MUSIC]] 标记才生成歌曲；关闭则绑定后每条回复都尝试生成"
+          },
+          "timeout": {
+            "description": "超时（秒）",
+            "type": "int",
+            "default": 1800
           }
         }
       },

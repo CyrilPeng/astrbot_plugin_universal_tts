@@ -264,9 +264,9 @@ function sleep(ms) {
  * 后端把合成放到后台任务里，这里只发短请求 —— 因为视图经由反向代理访问，
  * 单个请求挂太久会被中间层以 524 掐断（实测不到 30 秒就会发生）。
  */
-async function waitForPreview(jobId) {
+async function waitForPreview(jobId, maxAttempts = PREVIEW_POLL_MAX) {
   let lastError = null;
-  for (let attempt = 0; attempt < PREVIEW_POLL_MAX; attempt += 1) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     await sleep(attempt === 0 ? 300 : PREVIEW_POLL_INTERVAL);
     let data = null;
     try {
@@ -289,8 +289,14 @@ async function waitForPreview(jobId) {
 
 async function runPreview(payload, button) {
   const original = button.textContent;
+  const isMusic = Boolean(editing && editing.templateKey === "unsloth_music");
+  const isImage = Boolean(editing && editing.templateKey === "unsloth_image");
   button.disabled = true;
-  button.textContent = t("testing", "合成中…");
+  button.textContent = isMusic
+    ? t("preview_music_testing", "歌曲生成中…")
+    : isImage
+      ? t("preview_image_testing", "图片生成中…")
+      : t("testing", "合成中…");
   setEditorError("");
   setBanner("");
   try {
@@ -299,10 +305,34 @@ async function runPreview(payload, button) {
     if (!jobId) {
       throw new Error(t("preview_empty", "试听任务提交失败"));
     }
-    const data = await waitForPreview(jobId);
+    // 音乐/图片模型冷启动/推理可能到分钟级，前端轮询也要放宽。
+    const data = await waitForPreview(
+      jobId,
+      isMusic || isImage ? 450 : PREVIEW_POLL_MAX,
+    );
     if (!data.audio) {
-      throw new Error(t("preview_empty", "引擎没有返回音频"));
+      throw new Error(t("preview_empty", "引擎没有返回结果"));
     }
+    const fmt = String(data.format || "").toLowerCase();
+    const imageFormats = new Set(["png", "jpg", "jpeg", "webp", "gif"]);
+    if (data.media_type === "image" || imageFormats.has(fmt)) {
+      els.player.pause();
+      els.player.hidden = true;
+      els.player.removeAttribute("src");
+      els.previewImage.src = data.audio;
+      els.previewImage.hidden = false;
+      setBanner(
+        t("preview_image_ok", "图片生成成功（{fmt} · {ms} ms · {kb} KB）", {
+          fmt: data.format || "?",
+          ms: data.took_ms || data.elapsed_ms || 0,
+          kb: Math.max(1, Math.round((data.bytes || 0) / 1024)),
+        }),
+        "ok",
+      );
+      return;
+    }
+    els.previewImage.hidden = true;
+    els.previewImage.removeAttribute("src");
     if (data.playable === false) {
       setBanner(
         t("preview_unplayable", "合成成功，但格式 {fmt} 无法在浏览器中播放。", {
@@ -426,6 +456,26 @@ function renderRow(engine, index) {
     badge.className = "badge";
     badge.textContent = t("badge_default", "默认");
     name.appendChild(badge);
+  }
+  if (engine.is_music) {
+    const musicBadge = document.createElement("span");
+    musicBadge.className = "badge badge-music";
+    musicBadge.textContent = t("engine_music_badge", "音乐");
+    musicBadge.title = t(
+      "engine_music_hint",
+      "命中 BGM/歌曲请求时自动使用",
+    );
+    name.appendChild(musicBadge);
+  }
+  if (engine.is_image) {
+    const imageBadge = document.createElement("span");
+    imageBadge.className = "badge badge-image";
+    imageBadge.textContent = t("engine_image_badge", "图片");
+    imageBadge.title = t(
+      "engine_image_hint",
+      "命中图片请求时自动使用",
+    );
+    name.appendChild(imageBadge);
   }
   main.appendChild(name);
 
@@ -561,9 +611,13 @@ function renderEditor() {
   });
 
   const items = (state.templates[templateKey] || {}).items || {};
+  const mode = String(draft.mode || "Same language");
   els.fields.innerHTML = "";
   Object.entries(items).forEach(([key, spec]) => {
     if (!spec || typeof spec !== "object") return;
+    // 克隆模式联动：Cross-lingual 隐藏转写，Instruct 才显示 Instruction。
+    if (key === "transcript" && (mode === "Cross-lingual" || mode === "None")) return;
+    if (key === "instructions" && mode !== "Instruct") return;
     els.fields.appendChild(renderField(key, spec, draft[key], editing.secrets.has(key)));
   });
 }
@@ -571,6 +625,9 @@ function renderEditor() {
 function renderField(key, spec, value, secretIsSet) {
   if (key === "voice_sample_name") {
     return renderSampleField(key, spec, value);
+  }
+  if (key === "voice_id") {
+    return renderVoiceField(key, spec, value);
   }
 
   const wrap = document.createElement("label");
@@ -619,6 +676,15 @@ function renderField(key, spec, value, secretIsSet) {
   if (secretIsSet && type !== "bool") {
     input.placeholder = t("secret_set", "已设置，留空表示不修改");
   }
+  if (key === "mode") {
+    input.addEventListener("change", () => {
+      if (!editing) return;
+      const next = collectDraft();
+      next.mode = input.value;
+      editing.draft = next;
+      renderEditor();
+    });
+  }
   wrap.appendChild(input);
 
   if (spec.hint) {
@@ -626,6 +692,166 @@ function renderField(key, spec, value, secretIsSet) {
     hint.className = "field-hint";
     hint.textContent = String(spec.hint);
     wrap.appendChild(hint);
+  }
+
+  return wrap;
+}
+
+/** 已有音色字段：下拉选择服务端已保存的音色。
+ *  服务端路由是 engines/voices；只有实现了 list_voices 的引擎返回列表。
+ *  空值表示不指定 voice_id，由引擎用样本自动创建。
+ */
+function renderVoiceField(key, spec, value) {
+  const wrap = document.createElement("div");
+  wrap.className = "field";
+
+  const label = document.createElement("span");
+  label.className = "field-label";
+  label.textContent = spec.description || key;
+  wrap.appendChild(label);
+
+  const row = document.createElement("div");
+  row.className = "sample-row";
+
+  const select = document.createElement("select");
+  select.name = key;
+
+  const emptyOption = document.createElement("option");
+  emptyOption.value = "";
+  emptyOption.textContent = t(
+    "voice_pick",
+    "选择要使用的音色（留空自动创建）",
+  );
+  select.appendChild(emptyOption);
+
+  const current = value === undefined || value === null ? "" : String(value);
+  if (current) {
+    const currentOption = document.createElement("option");
+    currentOption.value = current;
+    currentOption.textContent = t("voice_missing_current", "当前 ID 不在列表中：{id}", {
+      id: current,
+    });
+    currentOption.selected = true;
+    select.appendChild(currentOption);
+  }
+
+  row.appendChild(select);
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "btn btn-secondary";
+  button.textContent = t("voice_fetch", "读取已有音色");
+  row.appendChild(button);
+  wrap.appendChild(row);
+
+  const status = document.createElement("span");
+  status.className = "field-hint";
+  wrap.appendChild(status);
+
+  if (spec.hint) {
+    const hint = document.createElement("span");
+    hint.className = "field-hint";
+    hint.textContent = String(spec.hint);
+    wrap.appendChild(hint);
+  }
+
+  let loaded = false;
+  let loading = false;
+
+  function hasKey() {
+    const draft = collectDraft();
+    if (String(draft.api_key || "").trim()) return true;
+    return Boolean(editing && editing.secrets && editing.secrets.has("api_key"));
+  }
+
+  function renderOptions(voices, keep) {
+    const sorted = voices.slice().sort((a, b) => {
+      const an = String(a.name || a.id || "");
+      const bn = String(b.name || b.id || "");
+      return an.localeCompare(bn, "zh-Hans-CN") || String(a.id).localeCompare(String(b.id));
+    });
+    const counts = {};
+    sorted.forEach((voice) => {
+      const name = String(voice.name || "");
+      if (name) counts[name] = (counts[name] || 0) + 1;
+    });
+
+    select.innerHTML = "";
+    const empty = document.createElement("option");
+    empty.value = "";
+    empty.textContent = t(
+      "voice_pick",
+      "选择要使用的音色（留空自动创建）",
+    );
+    select.appendChild(empty);
+
+    sorted.forEach((voice) => {
+      const id = String(voice.id || "");
+      if (!id) return;
+      const name = String(voice.name || "");
+      const option = document.createElement("option");
+      option.value = id;
+      option.textContent = name ? (counts[name] > 1 ? `${name} (${id})` : name) : id;
+      option.title = id;
+      select.appendChild(option);
+    });
+
+    if (keep && !sorted.some((voice) => String(voice.id || "") === keep)) {
+      const currentOption = document.createElement("option");
+      currentOption.value = keep;
+      currentOption.textContent = t(
+        "voice_missing_current",
+        "当前 ID 不在列表中：{id}",
+        { id: keep },
+      );
+      select.appendChild(currentOption);
+    }
+
+    select.value = keep;
+    if (select.value !== keep) select.value = "";
+  }
+
+  async function loadVoices() {
+    if (loading) return;
+    loading = true;
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = t("voice_fetching", "读取中…");
+    status.textContent = t("voice_fetching", "读取中…");
+    try {
+      const payload = { engine: collectDraft() };
+      if (editing && editing.index !== null) payload.index = editing.index;
+      const data = await bridge.apiPost("engines/voices", withToken(payload));
+      const voices = Array.isArray(data.voices) ? data.voices : [];
+      const keep = select.value;
+      renderOptions(voices, keep);
+      loaded = true;
+      status.textContent = voices.length
+        ? t("voice_loaded", "已加载 {count} 个音色", { count: voices.length })
+        : t("voice_empty", "服务端没有已保存的音色");
+    } catch (error) {
+      status.textContent = error && error.message ? error.message : String(error);
+    } finally {
+      loading = false;
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
+
+  button.addEventListener("click", loadVoices);
+  select.addEventListener("focus", () => {
+    if (loaded || loading) return;
+    if (hasKey()) {
+      loadVoices();
+    } else {
+      status.textContent = t("voice_need_key", "先填写 API Key，再读取音色");
+    }
+  });
+
+  if (hasKey()) {
+    setTimeout(loadVoices, 0);
+  } else {
+    status.textContent = t("voice_need_key", "先填写 API Key，再读取音色");
   }
 
   return wrap;
@@ -786,7 +1012,10 @@ async function deleteSampleEntry(sample) {
 function collectDraft() {
   if (!editing) return {};
   const items = (state.templates[editing.templateKey] || {}).items || {};
-  const draft = { __template_key: editing.templateKey };
+  // 从现有草稿开始，保留被模式隐藏的字段值（如 Cross-lingual 下的转写）。
+  const draft = Object.assign({}, editing.draft || {}, {
+    __template_key: editing.templateKey,
+  });
   for (const [key, spec] of Object.entries(items)) {
     if (!spec || typeof spec !== "object") continue;
     const input = els.fields.querySelector(`[name="${CSS.escape(key)}"]`);
@@ -899,6 +1128,56 @@ async function deleteEngine(index) {
   }
 }
 
+function setSaveProgress(percent, label) {
+  const value = Math.max(0, Math.min(100, Number(percent) || 0));
+  els.saveProgress.hidden = false;
+  els.saveProgressBar.style.width = value + "%";
+  els.saveProgressPercent.textContent = value + "%";
+  if (label) els.saveProgressLabel.textContent = label;
+}
+
+function hideSaveProgress() {
+  els.saveProgress.hidden = true;
+  els.saveProgressBar.style.width = "0%";
+  els.saveProgressPercent.textContent = "0%";
+  els.saveProgressLabel.textContent = "";
+}
+
+async function waitForSaveJob(jobId) {
+  const deadline = Date.now() + 180000;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    await sleep(400);
+    let data = null;
+    try {
+      data = await bridge.apiGet("engines/save/result", { job_id: jobId });
+    } catch (error) {
+      const message = error && error.message ? error.message : String(error);
+      const lowered = message.toLowerCase();
+      // 任务已过期/不存在时立即失败，避免无意义地轮询到超时。
+      if (
+        message.includes("不存在或已过期") ||
+        lowered.includes("not found") ||
+        lowered.includes("expired")
+      ) {
+        throw error;
+      }
+      // 单次轮询抖动不直接判失败，继续重试
+      lastError = error;
+      continue;
+    }
+    lastError = null;
+    if (!data) continue;
+    setSaveProgress(data.progress, data.label);
+    if (data.status === "done") return data;
+    if (data.status === "error") {
+      throw new Error(data.error || t("save_failed", "保存失败"));
+    }
+  }
+  if (lastError) throw lastError;
+  throw new Error(t("save_timeout", "保存超时，请重试"));
+}
+
 async function saveEditor() {
   if (!editing) return;
   const engine = collectDraft();
@@ -913,16 +1192,35 @@ async function saveEditor() {
   if (editing.index !== null) payload.index = editing.index;
 
   setEditorError("");
+  setBanner("");
+  const originalSaveText = els.btnSave.textContent;
   els.btnSave.disabled = true;
+  els.btnCancel.disabled = true;
+  els.btnClose.disabled = true;
+  // OpenAI 克隆引擎保存时会上传样本并创建音色，先显示准备阶段。
+  if (editing.templateKey === "openai_clone") {
+    els.btnSave.textContent = t("saving", "保存中…");
+    setSaveProgress(5, t("save_preparing", "准备中…"));
+  }
   try {
     const data = await bridge.apiPost("engines/save", withToken(payload));
-    applyPayload(data);
+    if (data && data.job_id) {
+      const result = await waitForSaveJob(data.job_id);
+      applyPayload(result.data);
+    } else {
+      applyPayload(data);
+    }
+    hideSaveProgress();
     els.editor.close();
     setBanner(t("saved", "已保存"), "ok");
   } catch (error) {
+    hideSaveProgress();
     await reportError(error, "inline");
   } finally {
     els.btnSave.disabled = false;
+    els.btnCancel.disabled = false;
+    els.btnClose.disabled = false;
+    els.btnSave.textContent = originalSaveText;
   }
 }
 
@@ -2019,12 +2317,17 @@ async function main() {
     list: byId("list"),
     empty: byId("empty"),
     player: byId("player"),
+    previewImage: byId("preview-image"),
     editor: byId("editor"),
     editorTitle: byId("editor-title"),
     editorError: byId("editor-error"),
     templateField: byId("template-field"),
     templateSelect: byId("template-select"),
     fields: byId("fields"),
+    saveProgress: byId("save-progress"),
+    saveProgressLabel: byId("save-progress-label"),
+    saveProgressPercent: byId("save-progress-percent"),
+    saveProgressBar: byId("save-progress-bar"),
     btnNew: byId("btn-new"),
     btnSave: byId("btn-save"),
     btnCancel: byId("btn-cancel"),

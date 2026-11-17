@@ -55,19 +55,57 @@ _SENSITIVE_FIELD_RE = re.compile(
 
 DISABLED_ENGINE = "__disabled__"
 
+# 用户消息命中这些信息型提问特征时，优先返回文本而不是语音。
+# 注意：这里匹配的是用户消息（event.message_str），不是机器人回复。
+DEFAULT_USER_INTENT_PATTERNS = [
+    r"(?:请问|介绍一下|解释一下|说明一下|什么是|是什么|是谁|叫什么|名字|名称|全称|简称|别名|英文名|中文名|又名|定义|含义|意思|列出|列举|对比|区别|步骤|教程|攻略|资料|来源|引用|查询|搜索|总结|概括|翻译|价格|多少钱|地址|电话|邮箱|网址|链接|怎么做|怎么用|怎么办|如何做|如何用|如何设置|如何评价|如何选择|在哪里|在哪儿|为什么|为啥)"
+]
+
+# 音乐/图片引擎模板与自动路由规则。
+MUSIC_TEMPLATE_KEYS = {"unsloth_music"}
+IMAGE_TEMPLATE_KEYS = {"unsloth_image"}
+_MUSIC_MARKER_RE = re.compile(r"\[\[\s*MUSIC\s*\]\]", re.IGNORECASE)
+_IMAGE_MARKER_RE = re.compile(r"\[\[\s*IMAGE\s*\]\]", re.IGNORECASE)
+DEFAULT_MUSIC_ROUTE_PATTERNS = [
+    r"(?:生成|写|创作|制作|编|来|做|给我|帮我).*(?:一首|一段|一曲|一个)?\s*(?:歌|歌曲|音乐|配乐|BGM|bgm|背景音乐|旋律|伴奏|奏乐|主题曲|片头曲|片尾曲)",
+    r"(?i)\b(?:make|create|generate|compose|write|produce)\b.{0,40}\b(?:bgm|song|music|soundtrack|instrumental|melody)\b",
+    r"(?i)\bbgm\b",
+]
+DEFAULT_IMAGE_ROUTE_PATTERNS = [
+    r"(?:画|绘制|生成|制作|做|来|给我|帮我).*(?:一张|一幅|一个)?\s*(?:图片|图像|照片|插画|海报|壁纸|头像|表情包|画|图)",
+    r"(?:画一张|画一幅|生成图片|生成图像|做一张图|来张图|来一张图|出图|AI绘画|文生图|画图)",
+    r"(?i)\b(?:draw|paint|generate|create|make)\b.{0,40}\b(?:image|picture|photo|illustration|poster|wallpaper|avatar|art)\b",
+    r"(?i)\b(?:image generation|text-to-image|t2i)\b",
+]
+
 # ---------------------------------------------------------------------------
 # WebUI 试听 / 样本管理
 # ---------------------------------------------------------------------------
 
 # 试听用的固定短句：保持较短，避免 base64 传输过大
 PREVIEW_TEXT = "你好，这是一段音色试听。"
+# 音乐引擎试听：写死短样本描述，引擎内部用固定的 style/lyrics，不调用 chat。
+PREVIEW_MUSIC_TEXT = "short ambient instrumental test"
+# 图片引擎试听：固定一张测试图，不影响聊天里的自动路由。
+PREVIEW_IMAGE_TEXT = "a cozy wooden cabin on a snowy mountain at dusk"
+PREVIEW_IMAGE_TIMEOUT = 300
 # 试听音频上限，超过则拒绝回传（base64 会再膨胀 4/3）
 PREVIEW_MAX_BYTES = 4 * 1024 * 1024
 # 单次试听的硬超时：超时即判失败，避免请求无限挂起被网关掐断
 PREVIEW_TIMEOUT = 60
-# 试听任务结果的保留时长与数量上限
+# 音乐模型冷启动/推理可能超过 60 秒；试听任务单独放宽。
+PREVIEW_MUSIC_TIMEOUT = 300
+# 试听 / 保存任务结果的保留时长与数量上限
 PREVIEW_JOB_TTL = 300
 PREVIEW_MAX_JOBS = 20
+# 保存引擎时预注册音色的阶段进度
+_SAVE_STAGE_PROGRESS = {
+    "checking": (5, "检查配置"),
+    "uploading": (35, "上传音色样本"),
+    "creating": (75, "创建保存音色"),
+    "done": (90, "音色已创建"),
+    "cached": (90, "使用已保存音色"),
+}
 # 单个样本文件上限
 SAMPLE_MAX_BYTES = 20 * 1024 * 1024
 # 允许的样本扩展名（与 _conf_schema.json 的 file_types 保持一致）
@@ -84,6 +122,11 @@ _AUDIO_MIME = {
     "flac": "audio/flac",
     "aac": "audio/aac",
     "pcm16": "audio/wav",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "webp": "image/webp",
+    "gif": "image/gif",
 }
 # 浏览器可直接播放的格式
 _PLAYABLE_FORMATS = {"wav", "mp3", "mpeg", "ogg", "opus", "flac", "aac"}
@@ -340,6 +383,7 @@ class UniversalTTSPlugin(Star):
         self._templates_cache: dict | None = None
         self._schema_cache: dict | None = None
         self._preview_jobs: dict[str, dict] = {}
+        self._save_jobs: dict[str, dict] = {}
         self._register_web_apis()
 
     def _load_bindings(self):
@@ -637,32 +681,183 @@ class UniversalTTSPlugin(Star):
                 return ec
         return None
 
-    def _get_engine_for_session(self, session_id: str) -> TTSEngine | None:
-        """获取指定会话应使用的引擎（有绑定用绑定，否则用全局）"""
+    def _get_engine_for_config(self, ec: dict) -> TTSEngine | None:
+        """按配置创建/复用引擎实例。"""
+        name = str(ec.get("instance_name") or "").strip() or str(
+            ec.get("__template_key") or ""
+        )
+        if name and name in self._cached_engines:
+            return self._cached_engines[name]
+        try:
+            engine = get_engine(ec, self.config)
+            if name:
+                self._cached_engines[name] = engine
+            return engine
+        except Exception as e:
+            logger.error(f"[UniversalTTS] 创建引擎失败 ({name or '?'}): {e}")
+            return None
+
+    @staticmethod
+    def _is_special_engine(engine) -> bool:
+        return bool(
+            getattr(engine, "is_music", False)
+            or getattr(engine, "is_image", False)
+        )
+
+    def _get_fallback_tts_engine(self) -> TTSEngine | None:
+        """当前绑定/全局是音乐或图片引擎时，普通 TTS 回退到第一个普通引擎。"""
+        for ec in self._list_engines():
+            key = ec.get("__template_key")
+            if key in MUSIC_TEMPLATE_KEYS or key in IMAGE_TEMPLATE_KEYS:
+                continue
+            engine = self._get_engine_for_config(ec)
+            if engine is not None and not self._is_special_engine(engine):
+                return engine
+        return None
+
+    def _get_music_engine(self, session_id: str) -> TTSEngine | None:
+        """优先使用会话绑定的音乐引擎，否则使用第一个已配置的音乐引擎。"""
+        bound_name = self._session_bindings.get(session_id)
+        if bound_name and bound_name != DISABLED_ENGINE:
+            ec = self._find_engine_config(bound_name)
+            if ec and ec.get("__template_key") in MUSIC_TEMPLATE_KEYS:
+                return self._get_engine_for_config(ec)
+        for ec in self._list_engines():
+            if ec.get("__template_key") in MUSIC_TEMPLATE_KEYS:
+                return self._get_engine_for_config(ec)
+        return None
+
+    def _get_image_engine(self, session_id: str) -> TTSEngine | None:
+        """优先使用会话绑定的图片引擎，否则使用第一个已配置的图片引擎。"""
+        bound_name = self._session_bindings.get(session_id)
+        if bound_name and bound_name != DISABLED_ENGINE:
+            ec = self._find_engine_config(bound_name)
+            if ec and ec.get("__template_key") in IMAGE_TEMPLATE_KEYS:
+                return self._get_engine_for_config(ec)
+        for ec in self._list_engines():
+            if ec.get("__template_key") in IMAGE_TEMPLATE_KEYS:
+                return self._get_engine_for_config(ec)
+        return None
+
+    def _should_route_to_music(self, user_text: str, reply_text: str) -> bool:
+        """用户消息命中音乐需求，或回复带 [[MUSIC]] 时自动路由。"""
+        if not self.config.get("music_auto_route", True):
+            return False
+        if _MUSIC_MARKER_RE.search(reply_text or ""):
+            return True
+        patterns = self.config.get("music_route_patterns")
+        if patterns is None:
+            patterns = DEFAULT_MUSIC_ROUTE_PATTERNS
+        if not isinstance(patterns, (list, tuple)):
+            return False
+        for raw in patterns:
+            pattern = str(raw).strip()
+            if not pattern:
+                continue
+            try:
+                if re.search(pattern, user_text or ""):
+                    return True
+            except re.error as e:
+                if pattern not in self._warned_skip_patterns:
+                    self._warned_skip_patterns.add(pattern)
+                    logger.warning(
+                        f"[UniversalTTS] 音乐路由规则不是有效正则，已忽略: {pattern} ({e})"
+                    )
+        return False
+
+    def _should_route_to_image(self, user_text: str, reply_text: str) -> bool:
+        """用户消息命中图片需求，或回复带 [[IMAGE]] 时自动路由。"""
+        if not self.config.get("image_auto_route", True):
+            return False
+        if _IMAGE_MARKER_RE.search(reply_text or ""):
+            return True
+        patterns = self.config.get("image_route_patterns")
+        if patterns is None:
+            patterns = DEFAULT_IMAGE_ROUTE_PATTERNS
+        if not isinstance(patterns, (list, tuple)):
+            return False
+        for raw in patterns:
+            pattern = str(raw).strip()
+            if not pattern:
+                continue
+            try:
+                if re.search(pattern, user_text or ""):
+                    return True
+            except re.error as e:
+                if pattern not in self._warned_skip_patterns:
+                    self._warned_skip_patterns.add(pattern)
+                    logger.warning(
+                        f"[UniversalTTS] 图片路由规则不是有效正则，已忽略: {pattern} ({e})"
+                    )
+        return False
+
+    def _decide_reply_mode(
+        self, session_id: str, user_text: str, reply_text: str
+    ) -> str:
+        """一次回复只决定一种模式：music / tts / none。
+
+        两个钩子都独立调用这个判定，只有匹配自己模式的钩子才执行，
+        不依赖钩子之间的相对优先级。
+        """
+        if self._session_bindings.get(session_id) == DISABLED_ENGINE:
+            return "none"
+        if self.config.get("image_auto_route", True) and self._should_route_to_image(
+            user_text, reply_text
+        ):
+            return "image"
+        if self.config.get("music_auto_route", True):
+            return (
+                "music"
+                if self._should_route_to_music(user_text, reply_text)
+                else "tts"
+            )
+        # 手动绑定模式：绑定/全局是音乐引擎时，按 require_marker 决定。
+        engine = self._get_engine_for_session(session_id)
+        if engine is not None and getattr(engine, "is_music", False):
+            if not getattr(engine, "require_marker", True):
+                return "music"
+            has_marker = getattr(engine, "has_marker", None)
+            return "music" if callable(has_marker) and has_marker(reply_text) else "tts"
+        return "tts"
+
+    def _get_engine_for_session(
+        self, session_id: str, allow_special: bool = True
+    ) -> TTSEngine | None:
+        """获取指定会话应使用的引擎（有绑定用绑定，否则用全局）。
+
+        ``allow_special=False`` 时，如果绑定/全局是音乐或图片引擎，回退到第一个
+        普通 TTS 引擎，避免普通对话被特殊引擎接管。
+        """
         if session_id and session_id in self._session_bindings:
             bound_name = self._session_bindings[session_id]
             if bound_name == DISABLED_ENGINE:
                 return None
-            # 检查同名引擎是否已缓存，复用实例
             if bound_name in self._cached_engines:
-                return self._cached_engines[bound_name]
-            # 创建新引擎实例并缓存
+                engine = self._cached_engines[bound_name]
+                if not allow_special and self._is_special_engine(engine):
+                    return self._get_fallback_tts_engine()
+                return engine
             ec = self._find_engine_config(bound_name)
             if ec:
-                try:
-                    engine = get_engine(ec, self.config)
-                    self._cached_engines[bound_name] = engine
+                engine = self._get_engine_for_config(ec)
+                if engine is not None:
+                    if not allow_special and self._is_special_engine(engine):
+                        return self._get_fallback_tts_engine()
                     return engine
-                except Exception as e:
-                    logger.error(f"[UniversalTTS] 会话绑定引擎创建失败 ({bound_name}): {e}")
-                    # 绑定失效，移除
-                    del self._session_bindings[session_id]
-                    self._save_bindings()
+                # 创建失败，移除绑定
+                del self._session_bindings[session_id]
+                self._save_bindings()
             else:
                 # 绑定的引擎已不存在，移除
                 logger.warning(f"[UniversalTTS] 会话绑定的引擎 '{bound_name}' 已不存在，已解除绑定")
                 del self._session_bindings[session_id]
                 self._save_bindings()
+        if (
+            not allow_special
+            and self._engine is not None
+            and self._is_special_engine(self._engine)
+        ):
+            return self._get_fallback_tts_engine()
         return self._engine
 
     async def initialize(self):
@@ -786,13 +981,173 @@ class UniversalTTSPlugin(Star):
         except Exception as e:
             logger.debug(f"[UniversalTTS] 抑制核心 TTS 失败（忽略）: {e}")
 
+    # AstrBot 按 priority 从大到小执行；必须高于 tts_hook(0)，
+    # 否则 tts_hook 会先把结果标成 GENERAL_RESULT，music_hook 就不再生效。
+    @filter.on_decorating_result(priority=1)
+    async def music_hook(self, event: AstrMessageEvent):
+        """歌曲/音乐引擎：调用 /v1/audio/run，把结果挂到当前被动回复。
+
+        音乐不是 TTS，因此这里绕过触发概率、字数上限、智能跳过和用户意图跳过；
+        只受插件总开关和 /tts_off 控制。
+        """
+        if not self.config.get("enable", True):
+            return
+        if not self._runtime_enabled:
+            return
+        result = event.get_result() if event is not None else None
+        if not result or not result.chain or not result.is_llm_result():
+            return
+
+        text_parts = [
+            component.text
+            for component in result.chain
+            if isinstance(component, Comp.Plain) and component.text
+        ]
+        full_text = "".join(text_parts).strip()
+        if not full_text:
+            return
+
+        session_id = _get_session_id(event)
+        user_text = str(getattr(event, "message_str", "") or "").strip()
+        if self._decide_reply_mode(session_id, user_text, full_text) != "music":
+            return
+
+        engine = self._get_music_engine(session_id)
+        if engine is None:
+            logger.warning(
+                "[UniversalTTS] 命中音乐需求，但没有配置 [Unsloth] 歌曲/音乐 引擎"
+            )
+            self._suppress_core_tts(result)
+            result.chain = [
+                Comp.Plain("音乐引擎未配置，请在插件中添加 [Unsloth] 歌曲/音乐 引擎")
+            ]
+            return
+
+        try:
+            # 用户输入才是歌词/风格的来源；LLM 回复只用来判断 [[MUSIC]] 标记。
+            source_text = user_text or full_text
+            audio_bytes, fmt = await self._synthesize_with_stats(engine, source_text)
+            audio_path = self._temp_dir / f"music_{uuid.uuid4().hex}.{fmt}"
+            await asyncio.to_thread(audio_path.write_bytes, audio_bytes)
+            self._cleanup_temp_files()
+
+            audio_path_str = str(audio_path)
+            self._tts_audio_text[audio_path_str] = source_text
+            self._last_tts_text[session_id] = source_text
+            self._record_activity(session_id, engine.instance_name)
+
+            record = Comp.Record(file=audio_path_str, url=audio_path_str)
+            original_chain = list(result.chain)
+            new_chain = []
+            inserted = False
+            for component in result.chain:
+                if isinstance(component, Comp.Plain):
+                    if component.text and not inserted:
+                        new_chain.append(record)
+                        inserted = True
+                    continue
+                new_chain.append(component)
+            result.chain = new_chain
+            # 发送失败时不要把 [[MUSIC]] JSON 当文本发出去。
+            fallback_chain = [Comp.Plain("歌曲发送失败，请稍后重试")]
+            fallback_chain.extend(
+                component
+                for component in original_chain
+                if not isinstance(component, Comp.Plain)
+            )
+            self._install_send_fallback(event, result, fallback_chain)
+            logger.info(
+                f"[UniversalTTS] 发送歌曲 ({engine.instance_name}): {source_text[:80]}"
+            )
+        except Exception as e:
+            logger.error(
+                f"[UniversalTTS] 歌曲生成失败 ({engine.instance_name}): "
+                f"{type(e).__name__}: {e}"
+            )
+            # 不要把结构化 prompt/JSON 原样发给用户。
+            result.chain = [Comp.Plain("歌曲生成失败，请稍后重试")]
+            self._suppress_core_tts(result)
+
+    @filter.on_decorating_result(priority=1)
+    async def image_hook(self, event: AstrMessageEvent):
+        """图片引擎：调用 /v1/images/generations，把结果挂到当前被动回复。
+
+        图片不是 TTS，因此绕过触发概率、字数上限、智能跳过和用户意图跳过；
+        只受插件总开关和 /tts_off 控制。
+        """
+        if not self.config.get("enable", True):
+            return
+        if not self._runtime_enabled:
+            return
+        result = event.get_result() if event is not None else None
+        if not result or not result.chain or not result.is_llm_result():
+            return
+
+        text_parts = [
+            component.text
+            for component in result.chain
+            if isinstance(component, Comp.Plain) and component.text
+        ]
+        full_text = "".join(text_parts).strip()
+        if not full_text:
+            return
+
+        session_id = _get_session_id(event)
+        user_text = str(getattr(event, "message_str", "") or "").strip()
+        if self._decide_reply_mode(session_id, user_text, full_text) != "image":
+            return
+
+        engine = self._get_image_engine(session_id)
+        if engine is None:
+            logger.warning(
+                "[UniversalTTS] 命中图片需求，但没有配置 [Unsloth] 图片生成 引擎"
+            )
+            self._suppress_core_tts(result)
+            result.chain = [
+                Comp.Plain("图片引擎未配置，请在插件中添加 [Unsloth] 图片生成 引擎")
+            ]
+            return
+
+        try:
+            source_text = user_text or full_text
+            image_bytes, fmt = await self._synthesize_with_stats(engine, source_text)
+            image_path = self._temp_dir / f"image_{uuid.uuid4().hex}.{fmt or 'png'}"
+            await asyncio.to_thread(image_path.write_bytes, image_bytes)
+            self._cleanup_temp_files()
+            self._record_activity(session_id, engine.instance_name)
+
+            image = Comp.Image.fromFileSystem(path=str(image_path))
+            original_chain = list(result.chain)
+            new_chain = []
+            inserted = False
+            for component in result.chain:
+                if isinstance(component, Comp.Plain):
+                    if component.text and not inserted:
+                        new_chain.append(image)
+                        inserted = True
+                    continue
+                new_chain.append(component)
+            result.chain = new_chain
+            self._install_send_fallback(
+                event, result, [Comp.Plain("图片发送失败，请稍后重试")]
+            )
+            logger.info(
+                f"[UniversalTTS] 发送图片 ({engine.instance_name}): {source_text[:80]}"
+            )
+        except Exception as e:
+            logger.error(
+                f"[UniversalTTS] 图片生成失败 ({engine.instance_name}): "
+                f"{type(e).__name__}: {e}"
+            )
+            result.chain = [Comp.Plain("图片生成失败，请稍后重试")]
+            self._suppress_core_tts(result)
+
     @filter.on_decorating_result(priority=0)
     async def tts_hook(self, event: AstrMessageEvent):
         """钩子：在消息发送前将文本转为语音"""
         if not self.config.get("enable", True):
             # 插件总开关关闭：交还给 AstrBot 原生行为（核心 TTS 若配置了提供商会照常工作）。
             return
-
         result = event.get_result() if event is not None else None
 
         if not self._runtime_enabled:
@@ -801,6 +1156,29 @@ class UniversalTTSPlugin(Star):
                 self._suppress_core_tts(result)
             return
         if not await self._is_astrbot_tts_enabled(event):
+            return
+
+        if not result or not result.chain or not result.is_llm_result():
+            return
+        text_parts = [
+            component.text
+            for component in result.chain
+            if isinstance(component, Comp.Plain) and component.text
+        ]
+        if not text_parts:
+            return
+        full_text = "".join(text_parts).strip()
+        if len(full_text) < 1:
+            return
+
+        session_id = _get_session_id(event)
+        user_text = str(getattr(event, "message_str", "") or "").strip()
+        # 一次回复只允许一种模式：music 由 music_hook 处理，tts 由这里处理。
+        mode = self._decide_reply_mode(session_id, user_text, full_text)
+        if mode == "none":
+            self._suppress_core_tts(result)
+            return
+        if mode != "tts":
             return
 
         # TTS 触发概率
@@ -814,23 +1192,13 @@ class UniversalTTSPlugin(Star):
                 self._suppress_core_tts(result)
             return
 
-        if not result or not result.chain:
-            return
-
-        if not result.is_llm_result():
-            return
-
-        # 收集所有文本
-        text_parts = []
-        for component in result.chain:
-            if isinstance(component, Comp.Plain) and component.text:
-                text_parts.append(component.text)
-
-        if not text_parts:
-            return
-
-        full_text = "".join(text_parts).strip()
-        if len(full_text) < 1:
+        # 用户意图跳过：介绍/解释/名称/步骤/价格等知识型提问优先返回文本。
+        user_skip_reason = self._should_skip_user_intent(user_text)
+        if user_skip_reason:
+            logger.debug(
+                f"[UniversalTTS] 命中用户意图跳过规则 ({user_skip_reason})，跳过 TTS"
+            )
+            self._suppress_core_tts(result)
             return
 
         # 字数上限检查
@@ -850,13 +1218,8 @@ class UniversalTTSPlugin(Star):
             self._suppress_core_tts(result)
             return
 
-        # 获取当前会话应使用的引擎
-        session_id = _get_session_id(event)
-        # 会话被 /tts_bind 0 禁音：明确不合成，同样抑制核心 TTS 接管。
-        if self._session_bindings.get(session_id) == DISABLED_ENGINE:
-            self._suppress_core_tts(result)
-            return
-        engine = self._get_engine_for_session(session_id)
+        # 模式已判定为 tts，取非音乐引擎合成。
+        engine = self._get_engine_for_session(session_id, allow_special=False)
         if engine is None:
             return
 
@@ -1078,6 +1441,30 @@ class UniversalTTSPlugin(Star):
                 if pattern not in self._warned_skip_patterns:
                     self._warned_skip_patterns.add(pattern)
                     logger.warning(f"[UniversalTTS] 跳过规则不是有效正则，已忽略: {pattern} ({e})")
+        return ""
+
+    def _should_skip_user_intent(self, text: str) -> str:
+        """用户消息命中信息型提问规则时跳过 TTS，返回跳过原因。"""
+        if not text:
+            return ""
+        patterns = self.config.get("tts_skip_user_intent_patterns")
+        if patterns is None:
+            patterns = DEFAULT_USER_INTENT_PATTERNS
+        if not isinstance(patterns, (list, tuple)):
+            return ""
+        for raw in patterns:
+            pattern = str(raw).strip()
+            if not pattern:
+                continue
+            try:
+                if re.search(pattern, text):
+                    return f"user_intent:{pattern}"
+            except re.error as e:
+                if pattern not in self._warned_skip_patterns:
+                    self._warned_skip_patterns.add(pattern)
+                    logger.warning(
+                        f"[UniversalTTS] 用户意图规则不是有效正则，已忽略: {pattern} ({e})"
+                    )
         return ""
 
     def _session_tts_status(self, session_id: str) -> str:
@@ -1481,11 +1868,13 @@ class UniversalTTSPlugin(Star):
         apis = (
             (f"{prefix}/engines", self.web_list_engines, ["GET"], "列出 TTS 引擎实例"),
             (f"{prefix}/engines/save", self.web_save_engine, ["POST"], "新增或更新引擎实例"),
+            (f"{prefix}/engines/save/result", self.web_save_result, ["GET"], "查询保存进度"),
             (f"{prefix}/engines/clone", self.web_clone_engine, ["POST"], "复制引擎实例"),
             (f"{prefix}/engines/delete", self.web_delete_engine, ["POST"], "删除引擎实例"),
             (f"{prefix}/engines/activate", self.web_activate_engine, ["POST"], "设置默认引擎"),
             (f"{prefix}/engines/test", self.web_test_engine, ["POST"], "提交试听任务"),
             (f"{prefix}/engines/test/result", self.web_test_result, ["GET"], "查询试听结果"),
+            (f"{prefix}/engines/voices", self.web_list_engine_voices, ["POST"], "读取引擎已有音色"),
             (f"{prefix}/samples", self.web_list_samples, ["GET"], "列出音色样本文件"),
             (f"{prefix}/samples/upload", self.web_upload_sample, ["POST"], "上传音色样本文件"),
             (f"{prefix}/samples/download", self.web_download_sample, ["GET"], "下载音色样本文件"),
@@ -1571,6 +1960,9 @@ class UniversalTTSPlugin(Star):
             for key in secrets:
                 item[key] = ""
             item["_secrets"] = secrets
+            template_key = str(item.get("__template_key") or "")
+            item["is_music"] = template_key in MUSIC_TEMPLATE_KEYS
+            item["is_image"] = template_key in IMAGE_TEMPLATE_KEYS
             item["stats"] = self._engine_stats_summary(str(item.get("instance_name") or ""))
             engines.append(item)
         payload = {
@@ -1744,6 +2136,42 @@ class UniversalTTSPlugin(Star):
                 return error_response(f"实例名称已存在: {name}")
         normalized["instance_name"] = name
 
+        # OpenAI 克隆引擎在保存时就完成样本上传和音色创建，避免首次合成才注册。
+        # 前端通过 job 轮询进度条；选择已有 voice_id 时无需预注册，直接同步保存。
+        if template_key == "openai_clone" and not str(
+            normalized.get("voice_id") or ""
+        ).strip():
+            self._prune_save_jobs()
+            job_id = uuid.uuid4().hex
+            self._save_jobs[job_id] = {
+                "status": "pending",
+                "progress": 0,
+                "label": "准备中…",
+                "created": time.time(),
+            }
+            asyncio.create_task(
+                self._run_save_job(
+                    job_id,
+                    engines,
+                    normalized,
+                    index,
+                    existing,
+                    name,
+                    template_key,
+                )
+            )
+            logger.debug(f"[UniversalTTS] 保存引擎任务已提交: {job_id}")
+            return json_response({"job_id": job_id})
+
+        data = await self._commit_engine_save(
+            engines, normalized, index, existing, name, template_key
+        )
+        return json_response(data)
+
+    async def _commit_engine_save(
+        self, engines, normalized, index, existing, name, template_key
+    ) -> dict:
+        """把归一化后的引擎写入列表、持久化并返回最新 WebUI payload。"""
         if index is None:
             engines.append(normalized)
         else:
@@ -1762,7 +2190,83 @@ class UniversalTTSPlugin(Star):
             "engines.save",
             f"{'更新' if existing is not None else '新建'}引擎「{name}」({template_key})",
         )
-        return json_response(self._build_engines_payload())
+        return self._build_engines_payload()
+
+    async def _run_save_job(
+        self, job_id, engines, normalized, index, existing, name, template_key
+    ) -> None:
+        """后台预注册音色，完成后落盘；进度写入 job 供前端轮询。"""
+        job = self._save_jobs.get(job_id)
+        if job is None:
+            return
+        engine = None
+
+        def report(stage: str) -> None:
+            percent, label = _SAVE_STAGE_PROGRESS.get(
+                stage, (int(job.get("progress", 0)), str(job.get("label") or ""))
+            )
+            job.update(progress=percent, label=label, updated=time.time())
+
+        try:
+            job.update(status="running", progress=5, label="检查配置")
+            engine = get_engine(normalized, self.config)
+            prepare = getattr(engine, "prepare_voice", None)
+            if callable(prepare):
+                await prepare(report)
+            else:
+                report("cached")
+            job.update(progress=95, label="保存配置", updated=time.time())
+            data = await self._commit_engine_save(
+                engines, normalized, index, existing, name, template_key
+            )
+            job.update(status="done", progress=100, label="完成", data=data)
+        except Exception as e:
+            logger.warning(f"[UniversalTTS] 保存引擎时预注册音色失败: {e}")
+            job.update(
+                status="error",
+                error=f"{type(e).__name__}: {e}",
+                label="失败",
+                updated=time.time(),
+            )
+        finally:
+            if engine is not None:
+                try:
+                    await engine.close()
+                except Exception:
+                    pass
+
+    async def web_save_result(self):
+        """轮询保存任务的状态与进度。"""
+        job_id = str(request.query.get("job_id", "") or "").strip()
+        if not job_id:
+            return error_response("缺少 job_id 参数")
+        job = self._save_jobs.get(job_id)
+        if job is None:
+            return error_response("保存任务不存在或已过期，请重试")
+        result = {
+            "status": job.get("status", "pending"),
+            "progress": int(job.get("progress", 0)),
+            "label": job.get("label", ""),
+        }
+        for key in ("error", "data"):
+            if key in job:
+                result[key] = job[key]
+        return json_response(result)
+
+    def _prune_save_jobs(self) -> None:
+        """清理过期保存任务，避免内存无限增长。"""
+        now = time.time()
+        for key in [
+            k
+            for k, v in self._save_jobs.items()
+            if now - v.get("created", now) > PREVIEW_JOB_TTL
+        ]:
+            self._save_jobs.pop(key, None)
+        while len(self._save_jobs) >= PREVIEW_MAX_JOBS:
+            oldest = min(
+                self._save_jobs, key=lambda k: self._save_jobs[k].get("created", 0)
+            )
+            self._save_jobs.pop(oldest, None)
 
     async def web_clone_engine(self):
         payload = await request.json(default={})
@@ -1911,10 +2415,73 @@ class UniversalTTSPlugin(Star):
             "status": job.get("status", "pending"),
             "elapsed_ms": int((time.time() - job.get("created", time.time())) * 1000),
         }
-        for key in ("audio", "format", "bytes", "playable", "text", "error", "took_ms"):
+        for key in (
+            "audio",
+            "format",
+            "media_type",
+            "bytes",
+            "playable",
+            "text",
+            "error",
+            "took_ms",
+        ):
             if key in job:
                 result[key] = job[key]
         return json_response(result)
+
+    async def web_list_engine_voices(self):
+        """读取引擎服务端已保存的音色（目前仅 OpenAI 克隆引擎支持）。
+
+        与试听接口一样，既支持已保存的 ``index``，也支持编辑器里的草稿
+        ``engine``，这样用户还没保存引擎时就能先读取服务端音色。
+        """
+        payload = await request.json(default={}) or {}
+        raw_engines = self._list_engines()
+        try:
+            index = (
+                self._as_index(payload.get("index"), len(raw_engines))
+                if payload.get("index") is not None
+                else None
+            )
+        except ValueError as e:
+            return error_response(str(e))
+
+        existing = dict(raw_engines[index]) if index is not None else None
+        draft = payload.get("engine")
+        if isinstance(draft, dict):
+            template_key = str(
+                draft.get("__template_key")
+                or (existing or {}).get("__template_key")
+                or ""
+            ).strip()
+            if not template_key:
+                return error_response("缺少引擎类型 __template_key")
+            try:
+                engine_config = self._normalize_engine(template_key, draft, existing)
+            except ValueError as e:
+                return error_response(str(e))
+        elif existing is not None:
+            engine_config = existing
+        else:
+            return error_response("需要提供 index 或 engine 参数")
+
+        engine = None
+        try:
+            engine = get_engine(engine_config, self.config)
+            list_voices = getattr(engine, "list_voices", None)
+            if not callable(list_voices):
+                return error_response("当前引擎不支持读取已有音色")
+            voices = await list_voices()
+            return json_response({"voices": voices})
+        except Exception as e:
+            logger.warning(f"[UniversalTTS] 读取已有音色失败: {e}")
+            return error_response(f"{type(e).__name__}: {e}")
+        finally:
+            if engine is not None:
+                try:
+                    await engine.close()
+                except Exception:
+                    pass
 
     def _prune_preview_jobs(self) -> None:
         """清掉过期任务，并保证任务表不会无限增长。"""
@@ -1938,15 +2505,38 @@ class UniversalTTSPlugin(Star):
 
         engine = None
         started = time.monotonic()
+        preview_text = PREVIEW_TEXT
+        preview_timeout = PREVIEW_TIMEOUT
+        is_image = False
         try:
             engine = get_engine(engine_config, self.config)
-            audio, audio_format = await asyncio.wait_for(
-                engine.synthesize(PREVIEW_TEXT), timeout=PREVIEW_TIMEOUT
-            )
+            is_image = bool(getattr(engine, "is_image", False))
+            if is_image:
+                preview_text = PREVIEW_IMAGE_TEXT
+                preview_timeout = PREVIEW_IMAGE_TIMEOUT
+                audio, audio_format = await asyncio.wait_for(
+                    engine.synthesize(preview_text), timeout=preview_timeout
+                )
+            elif getattr(engine, "is_music", False):
+                preview_text = PREVIEW_MUSIC_TEXT
+                preview_timeout = PREVIEW_MUSIC_TIMEOUT
+                preview_fn = getattr(engine, "synthesize_preview", None)
+                if callable(preview_fn):
+                    audio, audio_format = await asyncio.wait_for(
+                        preview_fn(), timeout=preview_timeout
+                    )
+                else:
+                    audio, audio_format = await asyncio.wait_for(
+                        engine.synthesize(preview_text), timeout=preview_timeout
+                    )
+            else:
+                audio, audio_format = await asyncio.wait_for(
+                    engine.synthesize(preview_text), timeout=preview_timeout
+                )
         except asyncio.TimeoutError:
             job.update(
                 status="error",
-                error=f"合成超时（超过 {PREVIEW_TIMEOUT} 秒），请检查接口状态或网络",
+                error=f"合成超时（超过 {preview_timeout} 秒），请检查接口状态或网络",
             )
             return
         except Exception as e:
@@ -1961,12 +2551,12 @@ class UniversalTTSPlugin(Star):
                     pass
 
         if not audio:
-            job.update(status="error", error="引擎返回了空音频")
+            job.update(status="error", error="引擎返回了空结果")
             return
         if len(audio) > PREVIEW_MAX_BYTES:
             job.update(
                 status="error",
-                error=f"试听音频过大（{len(audio)} 字节），超过 {PREVIEW_MAX_BYTES} 字节上限",
+                error=f"试听结果过大（{len(audio)} 字节），超过 {PREVIEW_MAX_BYTES} 字节上限",
             )
             return
 
@@ -1978,9 +2568,10 @@ class UniversalTTSPlugin(Star):
                 f"{base64.b64encode(audio).decode('ascii')}"
             ),
             format=fmt,
+            media_type="image" if is_image else "audio",
             bytes=len(audio),
-            playable=fmt in _PLAYABLE_FORMATS,
-            text=PREVIEW_TEXT,
+            playable=True if is_image else fmt in _PLAYABLE_FORMATS,
+            text=preview_text,
             took_ms=int((time.monotonic() - started) * 1000),
         )
 

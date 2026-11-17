@@ -18,6 +18,7 @@
       <div id="banner" class="banner" hidden></div>
       <div id="notice" class="banner banner-info" hidden></div>
       <audio id="player" class="player" controls hidden></audio>
+      <img id="preview-image" class="preview-image" alt="" hidden />
 
       <nav class="tabs" role="tablist">
         <button
@@ -153,6 +154,16 @@
         </label>
 
         <div id="fields" class="fields"></div>
+      </div>
+
+      <div id="save-progress" class="progress" hidden>
+        <div class="progress-head">
+          <span id="save-progress-label"></span>
+          <span id="save-progress-percent">0%</span>
+        </div>
+        <div class="progress-track">
+          <div id="save-progress-bar" class="progress-bar"></div>
+        </div>
       </div>
 
       <div class="editor-foot">
