@@ -2123,9 +2123,49 @@ def main():
         "_decide_reply_mode" in inspect.getsource(inst.image_hook),
     )
     check(
-        "图片引擎无试听",
-        "图片引擎不支持试听" in inspect.getsource(inst._run_preview_job),
+        "图片试听已接入",
+        "media_type" in inspect.getsource(inst._run_preview_job)
+        and "PREVIEW_IMAGE_TEXT" in inspect.getsource(inst._run_preview_job),
     )
+
+    class _FakeImageEngine:
+        is_image = True
+        instance_name = "image-preview"
+
+        async def synthesize(self, text):
+            return b"PNGDATA", "png"
+
+        async def close(self):
+            pass
+
+    original_get_engine = module.get_engine
+    module.get_engine = lambda cfg, conf=None: _FakeImageEngine()
+    image_job_id = "image-preview-job"
+    inst._preview_jobs[image_job_id] = {
+        "status": "pending",
+        "created": module.time.time(),
+    }
+    asyncio.run(
+        inst._run_preview_job(
+            image_job_id,
+            {"__template_key": "unsloth_image", "api_key": "k"},
+        )
+    )
+    image_job = inst._preview_jobs.get(image_job_id) or {}
+    check("图片试听任务完成", image_job.get("status") == "done", str(image_job))
+    check(
+        "图片试听 media_type",
+        image_job.get("media_type") == "image",
+        str(image_job),
+    )
+    check(
+        "图片试听 data URI",
+        str(image_job.get("audio", "")).startswith("data:image/png;base64,"),
+        str(image_job.get("audio", ""))[:80],
+    )
+    check("图片试听可播放", image_job.get("playable") is True, str(image_job))
+    inst._preview_jobs.pop(image_job_id, None)
+    module.get_engine = original_get_engine
 
     image = Image(
         {

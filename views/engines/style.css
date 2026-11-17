@@ -273,6 +273,13 @@ body {
   width: 100%;
 }
 
+.preview-image {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 12px;
+  max-width: 100%;
+}
+
 /* ---------- editor ---------- */
 
 .editor {

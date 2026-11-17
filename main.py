@@ -86,6 +86,9 @@ DEFAULT_IMAGE_ROUTE_PATTERNS = [
 PREVIEW_TEXT = "你好，这是一段音色试听。"
 # 音乐引擎试听：写死短样本描述，引擎内部用固定的 style/lyrics，不调用 chat。
 PREVIEW_MUSIC_TEXT = "short ambient instrumental test"
+# 图片引擎试听：固定一张测试图，不影响聊天里的自动路由。
+PREVIEW_IMAGE_TEXT = "a cozy wooden cabin on a snowy mountain at dusk"
+PREVIEW_IMAGE_TIMEOUT = 300
 # 试听音频上限，超过则拒绝回传（base64 会再膨胀 4/3）
 PREVIEW_MAX_BYTES = 4 * 1024 * 1024
 # 单次试听的硬超时：超时即判失败，避免请求无限挂起被网关掐断
@@ -119,6 +122,11 @@ _AUDIO_MIME = {
     "flac": "audio/flac",
     "aac": "audio/aac",
     "pcm16": "audio/wav",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "webp": "image/webp",
+    "gif": "image/gif",
 }
 # 浏览器可直接播放的格式
 _PLAYABLE_FORMATS = {"wav", "mp3", "mpeg", "ogg", "opus", "flac", "aac"}
@@ -2407,7 +2415,16 @@ class UniversalTTSPlugin(Star):
             "status": job.get("status", "pending"),
             "elapsed_ms": int((time.time() - job.get("created", time.time())) * 1000),
         }
-        for key in ("audio", "format", "bytes", "playable", "text", "error", "took_ms"):
+        for key in (
+            "audio",
+            "format",
+            "media_type",
+            "bytes",
+            "playable",
+            "text",
+            "error",
+            "took_ms",
+        ):
             if key in job:
                 result[key] = job[key]
         return json_response(result)
@@ -2490,15 +2507,17 @@ class UniversalTTSPlugin(Star):
         started = time.monotonic()
         preview_text = PREVIEW_TEXT
         preview_timeout = PREVIEW_TIMEOUT
+        is_image = False
         try:
             engine = get_engine(engine_config, self.config)
-            if getattr(engine, "is_image", False):
-                job.update(
-                    status="error",
-                    error="图片引擎不支持试听，请直接在聊天中生成图片",
+            is_image = bool(getattr(engine, "is_image", False))
+            if is_image:
+                preview_text = PREVIEW_IMAGE_TEXT
+                preview_timeout = PREVIEW_IMAGE_TIMEOUT
+                audio, audio_format = await asyncio.wait_for(
+                    engine.synthesize(preview_text), timeout=preview_timeout
                 )
-                return
-            if getattr(engine, "is_music", False):
+            elif getattr(engine, "is_music", False):
                 preview_text = PREVIEW_MUSIC_TEXT
                 preview_timeout = PREVIEW_MUSIC_TIMEOUT
                 preview_fn = getattr(engine, "synthesize_preview", None)
@@ -2532,12 +2551,12 @@ class UniversalTTSPlugin(Star):
                     pass
 
         if not audio:
-            job.update(status="error", error="引擎返回了空音频")
+            job.update(status="error", error="引擎返回了空结果")
             return
         if len(audio) > PREVIEW_MAX_BYTES:
             job.update(
                 status="error",
-                error=f"试听音频过大（{len(audio)} 字节），超过 {PREVIEW_MAX_BYTES} 字节上限",
+                error=f"试听结果过大（{len(audio)} 字节），超过 {PREVIEW_MAX_BYTES} 字节上限",
             )
             return
 
@@ -2549,8 +2568,9 @@ class UniversalTTSPlugin(Star):
                 f"{base64.b64encode(audio).decode('ascii')}"
             ),
             format=fmt,
+            media_type="image" if is_image else "audio",
             bytes=len(audio),
-            playable=fmt in _PLAYABLE_FORMATS,
+            playable=True if is_image else fmt in _PLAYABLE_FORMATS,
             text=preview_text,
             took_ms=int((time.monotonic() - started) * 1000),
         )

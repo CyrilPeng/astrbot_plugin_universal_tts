@@ -290,10 +290,13 @@ async function waitForPreview(jobId, maxAttempts = PREVIEW_POLL_MAX) {
 async function runPreview(payload, button) {
   const original = button.textContent;
   const isMusic = Boolean(editing && editing.templateKey === "unsloth_music");
+  const isImage = Boolean(editing && editing.templateKey === "unsloth_image");
   button.disabled = true;
   button.textContent = isMusic
     ? t("preview_music_testing", "歌曲生成中…")
-    : t("testing", "合成中…");
+    : isImage
+      ? t("preview_image_testing", "图片生成中…")
+      : t("testing", "合成中…");
   setEditorError("");
   setBanner("");
   try {
@@ -302,11 +305,34 @@ async function runPreview(payload, button) {
     if (!jobId) {
       throw new Error(t("preview_empty", "试听任务提交失败"));
     }
-    // 音乐模型冷启动/推理可能到分钟级，前端轮询也要放宽。
-    const data = await waitForPreview(jobId, isMusic ? 450 : PREVIEW_POLL_MAX);
+    // 音乐/图片模型冷启动/推理可能到分钟级，前端轮询也要放宽。
+    const data = await waitForPreview(
+      jobId,
+      isMusic || isImage ? 450 : PREVIEW_POLL_MAX,
+    );
     if (!data.audio) {
-      throw new Error(t("preview_empty", "引擎没有返回音频"));
+      throw new Error(t("preview_empty", "引擎没有返回结果"));
     }
+    const fmt = String(data.format || "").toLowerCase();
+    const imageFormats = new Set(["png", "jpg", "jpeg", "webp", "gif"]);
+    if (data.media_type === "image" || imageFormats.has(fmt)) {
+      els.player.pause();
+      els.player.hidden = true;
+      els.player.removeAttribute("src");
+      els.previewImage.src = data.audio;
+      els.previewImage.hidden = false;
+      setBanner(
+        t("preview_image_ok", "图片生成成功（{fmt} · {ms} ms · {kb} KB）", {
+          fmt: data.format || "?",
+          ms: data.took_ms || data.elapsed_ms || 0,
+          kb: Math.max(1, Math.round((data.bytes || 0) / 1024)),
+        }),
+        "ok",
+      );
+      return;
+    }
+    els.previewImage.hidden = true;
+    els.previewImage.removeAttribute("src");
     if (data.playable === false) {
       setBanner(
         t("preview_unplayable", "合成成功，但格式 {fmt} 无法在浏览器中播放。", {
@@ -2291,6 +2317,7 @@ async function main() {
     list: byId("list"),
     empty: byId("empty"),
     player: byId("player"),
+    previewImage: byId("preview-image"),
     editor: byId("editor"),
     editorTitle: byId("editor-title"),
     editorError: byId("editor-error"),
