@@ -26,13 +26,13 @@
     - 「读取已有音色」按钮可手动刷新；当前 ID 不在列表中时保留并标注
 - WebUI 新增 `[OpenAI] 兼容克隆（上传样本 → 保存音色 → 合成）` 模板，可与其他引擎一样增删改查、试听和会话绑定
 - **`unsloth_music` 歌曲/音乐引擎**：调用本地 Unsloth Studio `POST /v1/audio/run`
-  - LLM 回复用 `[[MUSIC]]` + JSON 提供 `style` / `lyrics` / `duration`；无歌词时自动传 `instrumental: true`
-  - 新增 `chat_model`：回复里没有 JSON 时，先调用 `/v1/chat/completions` 生成风格和歌词，再调用 `/v1/audio/run`
+  - LLM 回复只需要 `[[MUSIC]]` 标记；插件把**用户消息**交给内置 chat 模型生成英文 `style` 和 `lyrics`，再调用 `/v1/audio/run`
+  - 内置 chat 模型固定为 `HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive:Q6_K`，不暴露 chat 提示词/超时/默认歌词等配置项
   - `api_base` 自动归一化：带不带 `/v1` 都可以，修复填成 OpenAI baseURL 时拼出 `/v1/v1/audio/run` 的 405
   - 生成结果挂到当前被动回复，群聊不需要主动消息权限
   - 绕过 TTS 概率、字数上限、智能跳过和用户意图跳过；失败时回复文本提示
   - 默认 `require_marker: true`，没有 `[[MUSIC]]` 标记时按普通文本处理
-  - 配合 bgm-generation skill 的 `--payload` 输出可直接使用
+  - WebUI 试听写死 5 秒短样本的 style/lyrics，不调用 chat，只测试音乐模型
 - **用户意图跳过**：新增 `tts_skip_user_intent_patterns`，匹配**用户消息**而不是机器人回复；命中「介绍 / 名称 / 定义 / 步骤 / 价格 / 地址」等知识型提问时返回文本
   - 默认包含一组强信息词正则，可在 WebUI「全局设置 → 用户意图跳过规则」中增删
   - 与 `tts_skip_patterns`（匹配回复文本）互补
@@ -40,7 +40,7 @@
 
 ### 说明
 
-- 测试 319 -> 428 项（新增克隆引擎模板、参数校验、完整 `inputs → voices → speech` 流程、缓存复用与失效重建、读取已有音色接口、音色名取样本文件名、生成语言参数、随机种子、模型名可选发送、四种克隆模式、保存时预注册与进度条、用户意图跳过、歌曲引擎与音乐试听、chat 生成歌词/风格、原有引擎兼容性回归）
+- 测试 319 -> 426 项（新增克隆引擎模板、参数校验、完整 `inputs → voices → speech` 流程、缓存复用与失效重建、读取已有音色接口、音色名取样本文件名、生成语言参数、随机种子、模型名可选发送、四种克隆模式、保存时预注册与进度条、用户意图跳过、歌曲引擎与音乐试听、固定 chat 生成歌词/风格、原有引擎兼容性回归）
 - 测试依赖 `httpx`（MockTransport 参与真实引擎类测试）
 
 ## v1.4.5

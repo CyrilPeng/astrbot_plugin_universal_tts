@@ -1823,25 +1823,28 @@ def main():
     Music = _pkg.UnslothMusicEngine
     check("unsloth_music 已注册", _pkg.ENGINE_REGISTRY.get("unsloth_music") is Music)
     check("unsloth_music 模板已入 schema", "unsloth_music" in inst._engine_templates())
+    music_items = set(inst._engine_templates()["unsloth_music"]["items"])
     check(
         "unsloth_music 模板字段完整",
-        {
-            "api_base",
-            "model",
-            "chat_model",
-            "chat_prompt",
-            "chat_timeout",
-            "style_prompt",
-            "lyrics",
-            "duration",
-            "require_marker",
-        }
-        <= set(inst._engine_templates()["unsloth_music"]["items"]),
+        {"api_base", "model", "duration", "require_marker"} <= music_items,
+        str(sorted(music_items)),
+    )
+    check(
+        "音乐模板已移除无效字段",
+        not (
+            {"chat_model", "chat_prompt", "chat_timeout", "style_prompt", "lyrics"}
+            & music_items
+        ),
+        str(sorted(music_items)),
     )
     check("注册音乐钩子", hasattr(inst, "music_hook"))
     check(
         "TTS 钩子跳过音乐结果",
         "_universal_tts_music_handled" in inspect.getsource(inst.tts_hook),
+    )
+    check(
+        "音乐钩子使用用户输入",
+        "message_str" in inspect.getsource(inst.music_hook),
     )
 
     music = Music(
@@ -1857,54 +1860,22 @@ def main():
     check("音乐默认要求标记", music.require_marker is True)
     check("音乐有标记", music.has_marker("[[MUSIC]] {}"))
     check("音乐无标记", not music.has_marker("普通文本"))
-
-    parsed = music._parse_reply(
-        '[[MUSIC]]\n'
-        '{"style": "upbeat synth pop", "lyrics": "[verse]\\nCity lights", "duration": 45}'
-    )
-    check("音乐解析风格", parsed["style"] == "upbeat synth pop", str(parsed))
-    check("音乐解析歌词", parsed["lyrics"] == "[verse]\nCity lights", str(parsed))
-    check("音乐解析时长", parsed["duration"] == 45.0, str(parsed))
-
-    no_marker = music._parse_reply("calm acoustic guitar")
     check(
-        "无标记用全文作风格",
-        no_marker["style"] == "calm acoustic guitar",
-        str(no_marker),
+        "音乐固定 chat 模型",
+        music.chat_model
+        == "HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive:Q6_K",
+        music.chat_model,
     )
-    check("无标记无歌词", no_marker["lyrics"] == "", str(no_marker))
+    check("音乐支持试听方法", hasattr(music, "synthesize_preview"))
 
-    try:
-        asyncio.run(music.synthesize("calm acoustic guitar"))
-        check("无标记不合成", False)
-    except RuntimeError:
-        check("无标记不合成", True)
-
-    music_default = Music(
-        {"instance_name": "music2", "api_key": "k", "lyrics": "默认歌词"}
+    music_v1 = Music(
+        {
+            "instance_name": "music-v1",
+            "api_key": "k",
+            "api_base": "http://192.168.10.2:8908/v1",
+        }
     )
-    explicit_empty = music_default._parse_reply(
-        '[[MUSIC]]\n{"style": "x", "lyrics": "", "duration": 5}'
-    )
-    check("显式空歌词不回退", explicit_empty["lyrics"] == "", str(explicit_empty))
-    missing_lyrics = music_default._parse_reply(
-        '[[MUSIC]]\n{"style": "x", "duration": 5}'
-    )
-    check(
-        "缺省歌词回退配置",
-        missing_lyrics["lyrics"] == "默认歌词",
-        str(missing_lyrics),
-    )
-    check("音乐试听文本带标记", "[[MUSIC]]" in module.PREVIEW_MUSIC_TEXT)
-    check("音乐试听超时更宽", module.PREVIEW_MUSIC_TIMEOUT > module.PREVIEW_TIMEOUT)
-    check("非音乐试听仍用原文本", module.PREVIEW_TEXT == "你好，这是一段音色试听。")
-    check("非音乐试听超时仍是 60", module.PREVIEW_TIMEOUT == 60)
-    for engine_name in ("MiMoV25Engine", "OpenAICompatEngine", "CustomHTTPEngine"):
-        engine_cls = getattr(_pkg, engine_name)
-        check(
-            f"{engine_name} 不是音乐引擎",
-            not getattr(engine_cls, "is_music", False),
-        )
+    check("音乐 api_base 去 /v1", music_v1.api_base == "http://192.168.10.2:8908")
 
     requests = []
 
@@ -1917,57 +1888,6 @@ def main():
                 request.content,
             )
         )
-        if request.url.path == "/v1/audio/run":
-            return httpx.Response(
-                200,
-                json={
-                    "clips": [
-                        {
-                            "id": "clip-1",
-                            "url": "/v1/audio/gallery/clip-1/file",
-                            "duration_s": 45.0,
-                        }
-                    ]
-                },
-            )
-        if request.url.path == "/v1/audio/gallery/clip-1/file":
-            return httpx.Response(200, content=b"WAVDATA")
-        return httpx.Response(404)
-
-    music._client = httpx.AsyncClient(transport=httpx.MockTransport(_music_handler))
-
-    async def _run_music():
-        result = await music.synthesize(
-            '[[MUSIC]]\n'
-            '{"style": "upbeat synth pop", "lyrics": "[verse]\\nCity lights", "duration": 45}'
-        )
-        await music.close()
-        return result
-
-    audio, fmt = asyncio.run(_run_music())
-    check("音乐合成返回音频", (audio, fmt) == (b"WAVDATA", "wav"), f"{audio!r} {fmt!r}")
-    check("音乐请求带 Bearer", requests[0][2] == "Bearer k", str(requests[0][:3]))
-    body = json.loads(requests[0][3])
-    check("音乐请求 workflow", body.get("workflow") == "music", str(body))
-    check("音乐请求 mode", body.get("mode") == "song", str(body))
-    check("音乐请求带歌词", body.get("lyrics") == "[verse]\nCity lights", str(body))
-    check("音乐请求有歌词不传 instrumental", "instrumental" not in body, str(body))
-    check("音乐请求带时长", body.get("duration_s") == 45.0, str(body))
-    check("音乐下载带 Bearer", requests[1][2] == "Bearer k", str(requests[1][:3]))
-
-    music_v1 = Music(
-        {
-            "instance_name": "music-v1",
-            "api_key": "k",
-            "api_base": "http://192.168.10.2:8908/v1",
-        }
-    )
-    check("音乐 api_base 去 /v1", music_v1.api_base == "http://192.168.10.2:8908")
-
-    chat_requests = []
-
-    def _chat_handler(request: httpx.Request) -> httpx.Response:
-        chat_requests.append((request.url.path, request.content))
         if request.url.path == "/v1/chat/completions":
             content = json.dumps(
                 {
@@ -1985,44 +1905,34 @@ def main():
                 json={
                     "clips": [
                         {
-                            "id": "clip-2",
-                            "url": "/v1/audio/gallery/clip-2/file",
+                            "id": "clip-1",
+                            "url": "/v1/audio/gallery/clip-1/file",
                         }
                     ]
                 },
             )
-        if request.url.path == "/v1/audio/gallery/clip-2/file":
-            return httpx.Response(200, content=b"SONGDATA")
+        if request.url.path == "/v1/audio/gallery/clip-1/file":
+            return httpx.Response(200, content=b"WAVDATA")
         return httpx.Response(404)
 
-    chat_music = Music(
-        {
-            "instance_name": "chat-music",
-            "api_key": "k",
-            "api_base": "http://192.168.10.2:8908/v1",
-            "chat_model": "chat-model",
-            "duration": 30,
-        }
-    )
-    chat_music._client = httpx.AsyncClient(
-        transport=httpx.MockTransport(_chat_handler)
-    )
+    music._client = httpx.AsyncClient(transport=httpx.MockTransport(_music_handler))
 
-    async def _run_chat_music():
-        result = await chat_music.synthesize("[[MUSIC]]\n帮我写一首关于城市的歌")
-        await chat_music.close()
+    async def _run_music():
+        result = await music.synthesize("帮我写一首关于城市夜晚的流行歌")
+        await music.close()
         return result
 
-    chat_audio, chat_fmt = asyncio.run(_run_chat_music())
-    check("chat 生成后音乐合成", (chat_audio, chat_fmt) == (b"SONGDATA", "wav"))
+    audio, fmt = asyncio.run(_run_music())
+    check("音乐合成返回音频", (audio, fmt) == (b"WAVDATA", "wav"), f"{audio!r} {fmt!r}")
     check(
         "先调用 chat 模型",
-        chat_requests[0][0] == "/v1/chat/completions",
-        str([r[0] for r in chat_requests]),
+        requests[0][1] == "/v1/chat/completions",
+        str([r[1] for r in requests]),
     )
-    chat_body = json.loads(chat_requests[0][1])
-    check("chat 使用配置模型", chat_body.get("model") == "chat-model", str(chat_body))
-    run_body = json.loads(chat_requests[1][1])
+    chat_body = json.loads(requests[0][3])
+    check("chat 使用固定模型", chat_body.get("model") == music.chat_model, str(chat_body))
+    check("chat 使用用户输入", "城市夜晚" in str(chat_body), str(chat_body))
+    run_body = json.loads(requests[1][3])
     check(
         "音乐使用 chat 生成的风格",
         run_body.get("text") == "generated synth pop",
@@ -2033,6 +1943,69 @@ def main():
         run_body.get("lyrics") == "[verse]\nGenerated line",
         str(run_body),
     )
+    check("音乐请求 workflow", run_body.get("workflow") == "music", str(run_body))
+    check("音乐请求 mode", run_body.get("mode") == "song", str(run_body))
+    check("音乐请求带 Bearer", requests[1][2] == "Bearer k", str(requests[1][:3]))
+    check("音乐下载带 Bearer", requests[2][2] == "Bearer k", str(requests[2][:3]))
+
+    preview_requests = []
+
+    def _preview_handler(request: httpx.Request) -> httpx.Response:
+        preview_requests.append((request.url.path, request.content))
+        if request.url.path == "/v1/audio/run":
+            return httpx.Response(
+                200,
+                json={
+                    "clips": [
+                        {
+                            "id": "clip-p",
+                            "url": "/v1/audio/gallery/clip-p/file",
+                        }
+                    ]
+                },
+            )
+        if request.url.path == "/v1/audio/gallery/clip-p/file":
+            return httpx.Response(200, content=b"PREVIEWDATA")
+        return httpx.Response(404)
+
+    preview_music = Music({"instance_name": "preview-music", "api_key": "k"})
+    preview_music._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(_preview_handler)
+    )
+
+    async def _run_preview_music():
+        result = await preview_music.synthesize_preview()
+        await preview_music.close()
+        return result
+
+    preview_audio, preview_fmt = asyncio.run(_run_preview_music())
+    check("音乐试听返回音频", (preview_audio, preview_fmt) == (b"PREVIEWDATA", "wav"))
+    check(
+        "音乐试听不调用 chat",
+        all(path != "/v1/chat/completions" for path, _ in preview_requests),
+        str([p for p, _ in preview_requests]),
+    )
+    preview_body = json.loads(preview_requests[0][1])
+    check(
+        "音乐试听写死风格",
+        preview_body.get("text") == "short ambient instrumental test",
+        str(preview_body),
+    )
+    check("音乐试听时长 5 秒", preview_body.get("duration_s") == 5.0, str(preview_body))
+    check("音乐试听器乐", preview_body.get("instrumental") is True, str(preview_body))
+    check(
+        "音乐试听文本为短样本",
+        module.PREVIEW_MUSIC_TEXT == "short ambient instrumental test",
+    )
+    check("音乐试听超时更宽", module.PREVIEW_MUSIC_TIMEOUT > module.PREVIEW_TIMEOUT)
+    check("非音乐试听仍用原文本", module.PREVIEW_TEXT == "你好，这是一段音色试听。")
+    check("非音乐试听超时仍是 60", module.PREVIEW_TIMEOUT == 60)
+    for engine_name in ("MiMoV25Engine", "OpenAICompatEngine", "CustomHTTPEngine"):
+        engine_cls = getattr(_pkg, engine_name)
+        check(
+            f"{engine_name} 不是音乐引擎",
+            not getattr(engine_cls, "is_music", False),
+        )
 
     print()
     if failures:

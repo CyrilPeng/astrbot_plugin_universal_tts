@@ -666,7 +666,7 @@
       },
       "unsloth_music": {
         "name": "[Unsloth] 歌曲/音乐（/v1/audio/run）",
-        "hint": "调用本地 Unsloth Studio 音乐模型生成歌曲/配乐；LLM 回复用 [[MUSIC]] + JSON 提供风格和歌词。",
+        "hint": "调用本地 Unsloth Studio：先用内置 chat 模型根据用户输入生成 style/lyrics，再调用 /v1/audio/run 生成歌曲，挂到当前被动回复。",
         "items": {
           "instance_name": {
             "description": "实例名称（用于标识和切换）",
@@ -689,35 +689,6 @@
             "type": "string",
             "default": "",
             "hint": "留空则使用 Studio 当前加载的模型；例如 audio-cpp/audio.cpp-gguf/Stable-Audio-3-Small-Music-GGUF"
-          },
-          "chat_model": {
-            "description": "歌词/风格 chat 模型",
-            "type": "string",
-            "default": "",
-            "hint": "先调用它生成 style/lyrics；留空则直接使用回复里的 JSON 或默认风格。例如 HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive:Q6_K"
-          },
-          "chat_prompt": {
-            "description": "chat 生成提示词",
-            "type": "text",
-            "default": "",
-            "hint": "留空使用内置提示词：只输出 {style, lyrics} JSON"
-          },
-          "chat_timeout": {
-            "description": "chat 超时（秒）",
-            "type": "int",
-            "default": 120
-          },
-          "style_prompt": {
-            "description": "默认风格提示词",
-            "type": "text",
-            "default": "",
-            "hint": "回复里没有 JSON/style 时使用；留空则用整段回复文本"
-          },
-          "lyrics": {
-            "description": "默认歌词",
-            "type": "text",
-            "default": "",
-            "hint": "回复里没有 lyrics 时使用；留空则生成器乐"
           },
           "duration": {
             "description": "默认时长（秒）",

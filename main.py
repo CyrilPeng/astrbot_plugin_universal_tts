@@ -67,11 +67,8 @@ DEFAULT_USER_INTENT_PATTERNS = [
 
 # 试听用的固定短句：保持较短，避免 base64 传输过大
 PREVIEW_TEXT = "你好，这是一段音色试听。"
-# 音乐引擎试听：用 [[MUSIC]] + 5 秒短样本，避免一次生成整首歌。
-PREVIEW_MUSIC_TEXT = (
-    "[[MUSIC]]\n"
-    '{"style": "short ambient instrumental test", "lyrics": "", "duration": 5}'
-)
+# 音乐引擎试听：写死短样本描述，引擎内部用固定的 style/lyrics，不调用 chat。
+PREVIEW_MUSIC_TEXT = "short ambient instrumental test"
 # 试听音频上限，超过则拒绝回传（base64 会再膨胀 4/3）
 PREVIEW_MAX_BYTES = 4 * 1024 * 1024
 # 单次试听的硬超时：超时即判失败，避免请求无限挂起被网关掐断
@@ -844,14 +841,17 @@ class UniversalTTSPlugin(Star):
             return
 
         try:
-            audio_bytes, fmt = await self._synthesize_with_stats(engine, full_text)
+            # 用户输入才是歌词/风格的来源；LLM 回复只用来判断 [[MUSIC]] 标记。
+            user_text = str(getattr(event, "message_str", "") or "").strip()
+            source_text = user_text or full_text
+            audio_bytes, fmt = await self._synthesize_with_stats(engine, source_text)
             audio_path = self._temp_dir / f"music_{uuid.uuid4().hex}.{fmt}"
             await asyncio.to_thread(audio_path.write_bytes, audio_bytes)
             self._cleanup_temp_files()
 
             audio_path_str = str(audio_path)
-            self._tts_audio_text[audio_path_str] = full_text
-            self._last_tts_text[session_id] = full_text
+            self._tts_audio_text[audio_path_str] = source_text
+            self._last_tts_text[session_id] = source_text
             self._record_activity(session_id, engine.instance_name)
 
             record = Comp.Record(file=audio_path_str, url=audio_path_str)
@@ -875,7 +875,7 @@ class UniversalTTSPlugin(Star):
             )
             self._install_send_fallback(event, result, fallback_chain)
             logger.info(
-                f"[UniversalTTS] 发送歌曲 ({engine.instance_name}): {full_text[:80]}"
+                f"[UniversalTTS] 发送歌曲 ({engine.instance_name}): {source_text[:80]}"
             )
         except Exception as e:
             logger.error(
@@ -2255,9 +2255,19 @@ class UniversalTTSPlugin(Star):
             if getattr(engine, "is_music", False):
                 preview_text = PREVIEW_MUSIC_TEXT
                 preview_timeout = PREVIEW_MUSIC_TIMEOUT
-            audio, audio_format = await asyncio.wait_for(
-                engine.synthesize(preview_text), timeout=preview_timeout
-            )
+                preview_fn = getattr(engine, "synthesize_preview", None)
+                if callable(preview_fn):
+                    audio, audio_format = await asyncio.wait_for(
+                        preview_fn(), timeout=preview_timeout
+                    )
+                else:
+                    audio, audio_format = await asyncio.wait_for(
+                        engine.synthesize(preview_text), timeout=preview_timeout
+                    )
+            else:
+                audio, audio_format = await asyncio.wait_for(
+                    engine.synthesize(preview_text), timeout=preview_timeout
+                )
         except asyncio.TimeoutError:
             job.update(
                 status="error",

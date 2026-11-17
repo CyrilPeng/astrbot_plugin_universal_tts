@@ -1,23 +1,13 @@
 """Unsloth Studio 歌曲/音乐生成引擎
 
-直接调用 Studio 的 ``POST /v1/audio/run``：
+固定流程：
 
-    {
-      "workflow": "music",
-      "mode": "song",
-      "model": "...",
-      "text": "<风格/场景提示词>",
-      "lyrics": "<歌词>",
-      "duration_s": 60,
-      "variations": 1
-    }
+1. 用本地 chat 模型根据**用户输入**生成 ``{"style": "...", "lyrics": "..."}``；
+   ``style`` 要求英文，``lyrics`` 用 [verse]/[chorus] 组织。
+2. 调用 ``POST /v1/audio/run``（``workflow=music``、``mode=song``）。
+3. 下载 ``clips[]`` 的音频，交给插件挂到当前被动回复。
 
-LLM 回复可以用 ``[[MUSIC]]`` 标记 + JSON 提供风格和歌词：
-
-    [[MUSIC]]
-    {"style": "upbeat synth pop with a catchy chorus", "lyrics": "[verse]...", "duration": 60}
-
-没有标记时，整段回复文本会被当作风格提示词；歌词和风格也可以由引擎配置兜底。
+试听走 ``synthesize_preview()``：写死 style/lyrics，不调用 chat，只测试音乐模型效果。
 """
 
 from __future__ import annotations
@@ -25,7 +15,6 @@ from __future__ import annotations
 import base64
 import json
 import re
-from pathlib import Path
 
 import httpx
 from astrbot.api import logger
@@ -33,18 +22,27 @@ from astrbot.api import logger
 from ..base import TTSEngine
 
 _MARKER_RE = re.compile(r"\[\[\s*MUSIC\s*\]\]", re.IGNORECASE)
-_DEFAULT_ERROR = "歌曲生成失败，请稍后重试"
+
+# 固定使用本地 chat 模型生成歌词/风格，不暴露成配置项。
+DEFAULT_CHAT_MODEL = "HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive:Q6_K"
+DEFAULT_CHAT_TIMEOUT = 120
 DEFAULT_CHAT_PROMPT = (
     "你是音乐制作助手。根据用户需求生成一首歌曲的风格提示词和歌词。"
+    "style 用英文，描述流派、情绪、乐器、制作和 BPM；"
+    "lyrics 用 [verse] / [chorus] 等标签组织。"
     "只输出一个 JSON 对象，不要代码块、不要解释："
-    '{"style": "英文风格/情绪/乐器/制作提示词", '
-    '"lyrics": "[verse]\\n...\\n[chorus]\\n..."}。'
+    '{"style": "...", "lyrics": "..."}。'
     "如果用户要求纯器乐，lyrics 返回空字符串。"
 )
 
+# 试听：写死短样本，确保能快速验证音乐模型。
+PREVIEW_STYLE = "short ambient instrumental test"
+PREVIEW_LYRICS = ""
+PREVIEW_DURATION = 5.0
+
 
 class UnslothMusicEngine(TTSEngine):
-    """调用本地 Unsloth Studio 音乐模型生成歌曲/音乐。"""
+    """调用本地 Unsloth Studio chat + 音乐模型生成歌曲/音乐。"""
 
     # 供插件钩子识别：音乐引擎要绕过 TTS 概率、字数上限和跳过规则。
     is_music = True
@@ -60,19 +58,12 @@ class UnslothMusicEngine(TTSEngine):
             raw_base = raw_base[:-3]
         self.api_base: str = raw_base.rstrip("/")
         self.model: str = str(config.get("model", "") or "").strip()
-        self.style_prompt: str = str(config.get("style_prompt", "") or "").strip()
-        self.lyrics: str = str(config.get("lyrics", "") or "").strip()
         self.duration: float = self._coerce_duration(config.get("duration", 30))
         self.timeout: int = self._coerce_timeout(config.get("timeout", 1800))
         self.require_marker: bool = bool(config.get("require_marker", True))
-        # 先让 chat 模型根据用户需求生成 style/lyrics，再交给音乐模型。
-        self.chat_model: str = str(config.get("chat_model", "") or "").strip()
-        self.chat_prompt: str = (
-            str(config.get("chat_prompt", "") or "").strip() or DEFAULT_CHAT_PROMPT
-        )
-        self.chat_timeout: int = self._coerce_timeout(
-            config.get("chat_timeout", 120)
-        )
+        self.chat_model: str = DEFAULT_CHAT_MODEL
+        self.chat_prompt: str = DEFAULT_CHAT_PROMPT
+        self.chat_timeout: int = DEFAULT_CHAT_TIMEOUT
         self.audio_format: str = "wav"
         self._client: httpx.AsyncClient | None = None
 
@@ -119,59 +110,14 @@ class UnslothMusicEngine(TTSEngine):
             return None
         return data if isinstance(data, dict) else None
 
-    def _parse_reply(self, text: str) -> dict:
-        """从回复里提取 style / lyrics / duration；没有标记时把全文当风格。"""
-        source = text or ""
-        style = ""
-        lyrics = None
-        duration = None
-        model = None
-        has_payload = False
-
-        marker = _MARKER_RE.search(source)
-        candidate = source[marker.end():].strip() if marker else source
-        data = self._extract_json_object(candidate)
-        if isinstance(data, dict):
-            has_payload = True
-            style = str(data.get("style") or data.get("prompt") or "").strip()
-            if "lyrics" in data:
-                # 显式给空歌词表示器乐，不回落到默认歌词。
-                lyrics = str(data.get("lyrics") or "").strip()
-            duration = data.get("duration") or data.get("duration_s")
-            model = str(data.get("model") or "").strip() or None
-
-        if not style:
-            style = (source if not marker else "").strip() or self.style_prompt
-        if not style:
-            style = "instrumental background music"
-        if lyrics is None:
-            lyrics = self.lyrics
-        lyrics = (lyrics or "").strip()
-        if duration is None:
-            duration = self.duration
-        try:
-            duration = min(600.0, max(1.0, float(duration)))
-        except (TypeError, ValueError):
-            duration = self.duration
-        return {
-            "style": style,
-            "lyrics": lyrics,
-            "duration": duration,
-            "model": model or self.model,
-            "has_payload": has_payload,
-            "clean_text": _MARKER_RE.sub("", source).strip(),
-        }
-
-    async def _chat_generate(self, text: str) -> dict | None:
-        """先让 chat 模型根据用户需求生成 style / lyrics。"""
-        if not self.chat_model:
-            return None
+    async def _generate_with_chat(self, user_text: str) -> tuple[str, str]:
+        """让 chat 模型根据用户输入生成 style/lyrics。"""
         client = self._get_client()
         payload = {
             "model": self.chat_model,
             "messages": [
                 {"role": "system", "content": self.chat_prompt},
-                {"role": "user", "content": text or "生成一首歌"},
+                {"role": "user", "content": user_text or "生成一首歌"},
             ],
             "temperature": 0.7,
         }
@@ -186,61 +132,45 @@ class UnslothMusicEngine(TTSEngine):
                 timeout=self.chat_timeout,
             )
         except Exception as e:
-            logger.warning(f"[UniversalTTS] 歌曲 chat 模型请求失败: {e}")
-            return None
+            raise RuntimeError(f"歌词/风格 chat 模型请求失败: {e}") from e
         if response.status_code >= 400:
-            logger.warning(
-                f"[UniversalTTS] 歌曲 chat 模型错误 [{response.status_code}]: "
-                f"{(response.text or '')[:200]}"
+            raise RuntimeError(
+                f"歌词/风格 chat 模型错误 [{response.status_code}]: "
+                f"{(response.text or '')[:300]}"
             )
-            return None
         try:
             data = response.json()
             content = data["choices"][0]["message"]["content"]
         except Exception as e:
-            logger.warning(f"[UniversalTTS] 歌曲 chat 模型响应异常: {e}")
-            return None
+            raise RuntimeError(f"歌词/风格 chat 模型响应异常: {e}") from e
 
         parsed = self._extract_json_object(str(content))
-        if isinstance(parsed, dict):
-            style = str(parsed.get("style") or "").strip()
-            lyrics = parsed.get("lyrics")
-            if style or lyrics is not None:
-                return {
-                    "style": style,
-                    "lyrics": "" if lyrics is None else str(lyrics).strip(),
-                }
-        # 模型没按 JSON 输出时，把整段内容当风格，避免直接失败。
-        text_content = str(content).strip()
-        return {"style": text_content, "lyrics": ""} if text_content else None
-
-    async def synthesize(self, text: str) -> tuple[bytes, str]:
-        if self.require_marker and not self.has_marker(text):
+        if not isinstance(parsed, dict):
             raise RuntimeError(
-                "Unsloth 音乐引擎需要 [[MUSIC]] 标记；普通文本不会触发歌曲生成"
+                f"歌词/风格 chat 模型未返回 JSON: {str(content)[:300]}"
             )
-        request = self._parse_reply(text)
-        # 回复里没有完整 JSON 时，先让 chat 模型按用户需求生成风格和歌词。
-        if self.chat_model and not request["has_payload"]:
-            generated = await self._chat_generate(request["clean_text"] or text)
-            if generated:
-                if generated.get("style"):
-                    request["style"] = generated["style"]
-                if "lyrics" in generated:
-                    request["lyrics"] = generated["lyrics"]
+        style = str(parsed.get("style") or "").strip()
+        lyrics = str(parsed.get("lyrics") or "").strip()
+        if not style:
+            raise RuntimeError("歌词/风格 chat 模型没有生成 style")
+        return style, lyrics
+
+    async def _run_music(
+        self, style: str, lyrics: str, duration: float
+    ) -> tuple[bytes, str]:
         payload: dict = {
             "workflow": "music",
             "mode": "song",
-            "text": request["style"],
-            "duration_s": request["duration"],
+            "text": style,
+            "duration_s": min(600.0, max(1.0, float(duration))),
             "variations": 1,
         }
-        if request["lyrics"]:
-            payload["lyrics"] = request["lyrics"]
+        if lyrics:
+            payload["lyrics"] = lyrics
         else:
             payload["instrumental"] = True
-        if request["model"]:
-            payload["model"] = request["model"]
+        if self.model:
+            payload["model"] = self.model
 
         client = self._get_client()
         response = await client.post(
@@ -295,8 +225,17 @@ class UnslothMusicEngine(TTSEngine):
             except Exception as e:
                 raise RuntimeError(f"Unsloth 音乐内联音频解码失败: {e}")
 
-        raise RuntimeError(
-            f"Unsloth 音乐没有返回音频: {str(data)[:300]}"
+        raise RuntimeError(f"Unsloth 音乐没有返回音频: {str(data)[:300]}")
+
+    async def synthesize(self, text: str) -> tuple[bytes, str]:
+        """text 是用户输入；先生成 style/lyrics，再生成音乐。"""
+        style, lyrics = await self._generate_with_chat(text)
+        return await self._run_music(style, lyrics, self.duration)
+
+    async def synthesize_preview(self) -> tuple[bytes, str]:
+        """试听：写死 style/lyrics，不调用 chat。"""
+        return await self._run_music(
+            PREVIEW_STYLE, PREVIEW_LYRICS, PREVIEW_DURATION
         )
 
     async def close(self) -> None:

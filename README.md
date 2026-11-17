@@ -105,20 +105,26 @@ POST {api_base}/audio/speech                 {"model", "voice", "input", "respon
 
 ### 回复格式
 
-LLM 最终回复写成：
+用户直接描述需求；LLM 最终回复带上 `[[MUSIC]]` 标记即可：
 
 ```text
 [[MUSIC]]
-{"style": "upbeat synth pop with a catchy chorus", "lyrics": "[verse]\nCity lights are calling me\n[chorus]\nWe dance until the morning", "duration": 60}
 ```
 
 - `[[MUSIC]]` 标记会触发音乐生成；默认 `require_marker: true`
-- 回复里带 JSON → 直接使用其中的 `style` / `lyrics`
-- 回复里没有 JSON 且配置了 `chat_model` → 先调用 `/v1/chat/completions` 生成 `style` / `lyrics`，再调用 `/v1/audio/run`
-- 有 `lyrics` → 人声歌曲；没有 `lyrics` → 器乐
-- 生成成功后，标记和 JSON 会被移除，替换成一条 `Comp.Record` 语音
-- 生成失败会回复“歌曲生成失败，请稍后重试”，不会把结构化 JSON 发给用户
+- 插件把**用户消息**交给内置 chat 模型，生成英文 `style` 和 `lyrics`
+- 然后调用 `/v1/audio/run`；过程中不需要用户或 skill 提供 JSON
+- 没有歌词 → 器乐；有歌词 → 人声歌曲
+- 生成成功后，标记会被移除，替换成一条 `Comp.Record` 语音
+- 生成失败会回复“歌曲生成失败，请稍后重试”
 - 音乐引擎绕过 TTS 触发概率、字数上限、智能跳过和用户意图跳过；只受插件总开关和 `/tts_off` 控制
+- WebUI 试听写死 5 秒短样本和 style/lyrics，不调用 chat，只测试音乐模型
+
+内置 chat 模型固定为：
+
+```text
+HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive:Q6_K
+```
 
 ### 配置项
 
@@ -127,24 +133,15 @@ LLM 最终回复写成：
 | `api_key` | Studio API Key |
 | `api_base` | Studio 地址，默认 `http://127.0.0.1:8888`；带不带 `/v1` 都可以，插件会自动归一化 |
 | `model` | 音乐模型 ID；留空使用 Studio 当前加载的模型 |
-| `chat_model` | 先生成风格/歌词的 chat 模型；留空则直接使用回复 JSON 或默认风格 |
-| `chat_prompt` | chat 模型提示词；留空使用内置 JSON 输出提示词 |
-| `chat_timeout` | chat 模型超时，默认 120 秒 |
-| `style_prompt` | 回复没有 `style` 时的默认风格 |
-| `lyrics` | 回复没有 `lyrics` 时的默认歌词；留空为器乐 |
-| `duration` | 默认时长，默认 30 秒 |
+| `duration` | 歌曲默认时长，默认 30 秒 |
 | `require_marker` | 是否必须带 `[[MUSIC]]` 标记，默认开启 |
-| `timeout` | 生成超时，默认 1800 秒 |
+| `timeout` | 音乐生成超时，默认 1800 秒 |
 
-### 与 bgm-generation skill 配合
+### 与 bgm-generation skill 的关系
 
-bgm-generation 负责根据用户需求组织风格和歌词；它的 `--payload` 模式会输出：
+universal_tts 歌曲引擎自己会调用 chat 模型生成风格和歌词，不需要 skill 输出 payload。
 
-```json
-{"style": "...", "lyrics": "...", "duration": 60}
-```
-
-把这段 JSON 放到 `[[MUSIC]]` 后面作为最终回复即可，插件会调用 `/v1/audio/run` 并把歌曲挂到被动回复。
+bgm-generation 仍可用于独立生成 BGM/歌曲（例如保存到文件、手动控制提示词和歌词），两者互不依赖。
 
 > 音乐生成可能需要几十秒到几分钟；回复会等待生成完成，超过平台回复窗口时可能被平台截断。
 
