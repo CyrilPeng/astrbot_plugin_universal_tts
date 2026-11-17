@@ -19,7 +19,6 @@
 | **阿里云百炼** | CosyVoice | DashScope 兼容接口 |
 | **Azure** | Cognitive Services | SSML + 情感风格 |
 | **ElevenLabs** | Text-to-Speech | 多语言高保真语音 |
-| **中转** | 音频文件 | 识别 `[[BGM:路径]]`，把音频挂到当前被动回复 |
 | **自定义** | HTTP TTS | 模板化接入任意 HTTP TTS API |
 
 ---
@@ -96,51 +95,6 @@ POST {api_base}/audio/speech                 {"model", "voice", "input", "respon
 ### 与自定义 HTTP TTS 的区别
 
 `[自定义] HTTP TTS` 只在一次请求里替换占位符，不会执行「上传样本 → 创建音色」两步；而 Unsloth `/v1/audio/speech` 只接受已保存音色的 id，不接受内联音频。OpenAI 兼容克隆引擎用于这种两步式接口。
-
----
-
-## 音频中转（被动回复）
-
-用于把已经生成好的音频（例如 BGM skill 的输出）挂到**当前被动回复**里，适合群聊或 `qq_official` 这类不允许主动消息的平台。
-
-### 工作方式
-
-1. 回复文本里带标记：
-
-   ```text
-   来了一段乡村烟火气的 BGM。
-   [[BGM:/AstrBot/data/workspaces/.../prepared-audio/xxx.wav]]
-   ```
-
-2. 插件识别 `[[BGM:路径]]`，移除标记，把 `Comp.Record` 插入本次回复的消息链。
-3. 框架按普通回复发出，不需要主动消息权限。
-
-### 引擎配置
-
-| 配置项 | 说明 |
-|---|---|
-| `marker` | 标记名，默认 `BGM`，对应 `[[BGM:路径]]` |
-| `allowed_dirs` | 允许读取的目录，每行一个；默认包含 `data/workspaces`、插件数据目录、插件临时目录 |
-| `keep_text` | 保留标记之外的文字，和音频一起发送 |
-| `max_mb` | 单文件上限，默认 20MB |
-| `segment_seconds` | 平台发送失败时，用 ffmpeg 按该秒数切分后逐段发送，默认 60 |
-
-### 发送失败自动分段
-
-如果平台拒绝这条语音（例如时长、大小或格式限制），插件会：
-
-1. 用 ffmpeg 按 `segment_seconds` 把音频切开；
-2. 逐段用 `Comp.Record` 重新发送；
-3. 分段仍失败时，按 `fallback_to_text_on_send_error` 回退为原始文本。
-
-依赖 `ffmpeg`；没有 ffmpeg 时直接走文本回退。
-
-### 使用建议
-
-- 给当前群聊/私聊绑定中转引擎：`/tts_bind <序号>`
-- 中转引擎不是 TTS，不参与触发概率、字数上限、智能跳过和用户意图跳过
-- 路径必须是绝对路径，且位于 `allowed_dirs` 下；防止任意文件读取
-- 配合 BGM skill：`prepare_audio.py` 会输出 `marker` 字段，直接把该标记放进最终回复即可
 
 ---
 

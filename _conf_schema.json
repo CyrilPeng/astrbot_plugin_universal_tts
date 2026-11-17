@@ -664,46 +664,6 @@
           }
         }
       },
-      "audio_relay": {
-        "name": "[中转] 音频文件（BGM/外部音频）",
-        "hint": "不合成语音；从回复里的 [[BGM:绝对路径]] 标记读取音频，挂到当前被动回复中。适合群聊主动消息受限的场景。",
-        "items": {
-          "instance_name": {
-            "description": "实例名称（用于标识和切换）",
-            "type": "string",
-            "default": "audio_relay"
-          },
-          "marker": {
-            "description": "标记名",
-            "type": "string",
-            "default": "BGM",
-            "hint": "回复写成 [[BGM:音频绝对路径]]，插件会移除标记并挂上音频"
-          },
-          "allowed_dirs": {
-            "description": "允许读取的目录",
-            "type": "text",
-            "default": "data/workspaces\ndata/plugin_data/astrbot_plugin_universal_tts\ndata/temp/universal_tts",
-            "hint": "每行一个目录；只允许读取这些目录下的音频，防止任意文件读取"
-          },
-          "keep_text": {
-            "description": "保留标记外的文字",
-            "type": "bool",
-            "default": true,
-            "hint": "开启后文字和音频一起发送；关闭则只发音频"
-          },
-          "max_mb": {
-            "description": "单文件上限（MB）",
-            "type": "int",
-            "default": 20
-          },
-          "segment_seconds": {
-            "description": "发送失败时分段秒数",
-            "type": "int",
-            "default": 60,
-            "hint": "平台发送失败时用 ffmpeg 按这个秒数切分后逐段发送"
-          }
-        }
-      },
       "custom_http": {
         "name": "[自定义] HTTP TTS（模板化接入任意 API）",
         "hint": "占位符: ${TEXT}、${TEXT_JSON}、${API_KEY}、${VOICE_SAMPLE_BASE64}、${VOICE_SAMPLE_BASE64_RAW}、${VOICE_SAMPLE_PATH}",

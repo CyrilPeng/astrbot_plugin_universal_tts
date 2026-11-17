@@ -340,7 +340,7 @@ def main():
     check("_secrets 标记正确", e0["_secrets"] == ["api_key"], str(e0.get("_secrets")))
     check("空密钥不列入 _secrets", e1["_secrets"] == [])
     check("非敏感字段保留", e0["api_base"].endswith("/v1"))
-    check("templates 已返回", len(payload["templates"]) == 11, str(len(payload["templates"])))
+    check("templates 已返回", len(payload["templates"]) == 10, str(len(payload["templates"])))
 
     print("\n[3] 字段类型转换")
     check("int 转换", inst._coerce_field("30", "int", 0) == 30)
@@ -1799,84 +1799,6 @@ def main():
     )
     module.get_engine = original_get_engine
     web.request.query = {}
-
-    print("\n[41] 音频中转引擎")
-
-    Relay = _pkg.AudioRelayEngine
-    check("audio_relay 已注册", _pkg.ENGINE_REGISTRY.get("audio_relay") is Relay)
-    check("audio_relay 模板已入 schema", "audio_relay" in inst._engine_templates())
-    check(
-        "audio_relay 模板字段完整",
-        {"marker", "allowed_dirs", "keep_text", "max_mb", "segment_seconds"}
-        <= set(inst._engine_templates()["audio_relay"]["items"]),
-    )
-    check("注册中转钩子", hasattr(inst, "relay_hook"))
-    check(
-        "TTS 钩子跳过中转结果",
-        "_universal_tts_relay_handled" in inspect.getsource(inst.tts_hook),
-    )
-    check(
-        "分段发送已接入",
-        "_split_audio_file" in inspect.getsource(inst._install_send_fallback),
-    )
-
-    relay_dir = Path("data") / "workspaces"
-    relay_dir.mkdir(parents=True, exist_ok=True)
-    relay_file = relay_dir / "relay-test.wav"
-    relay_file.write_bytes(b"RIFF-relay")
-    relay_abs = relay_file.resolve()
-    relay_engine = Relay(
-        {
-            "instance_name": "relay",
-            "marker": "BGM",
-            "allowed_dirs": str(relay_dir),
-            "keep_text": True,
-            "max_mb": 1,
-            "segment_seconds": 60,
-        }
-    )
-    parsed = relay_engine.relay(f"来一段\n[[BGM:{relay_abs}]]")
-    check("中转标记解析", parsed is not None and parsed.clean_text == "来一段", str(parsed))
-    check("中转路径解析", parsed is not None and parsed.paths == [relay_abs], str(parsed))
-    check("无标记返回 None", relay_engine.relay("普通文本") is None)
-    check("中转引擎 is_relay", getattr(relay_engine, "is_relay", False) is True)
-
-    outside = Path("outside.wav").resolve()
-    outside.write_bytes(b"RIFF-outside")
-    bad = relay_engine.relay(f"[[BGM:{outside}]]")
-    check(
-        "白名单外路径被拒绝",
-        bad is not None and bad.paths == [] and bool(bad.errors),
-        str(bad),
-    )
-
-    text_file = relay_dir / "not-audio.txt"
-    text_file.write_text("x", encoding="utf-8")
-    bad_ext = relay_engine.relay(f"[[BGM:{text_file.resolve()}]]")
-    check(
-        "非音频扩展名被拒绝",
-        bad_ext is not None and bad_ext.paths == [],
-        str(bad_ext),
-    )
-
-    missing = relay_engine.relay(
-        f"[[BGM:{(relay_dir / 'missing.wav').resolve()}]]"
-    )
-    check(
-        "缺失文件被拒绝",
-        missing is not None and missing.paths == [],
-        str(missing),
-    )
-
-    big_file = relay_dir / "big.wav"
-    big_file.write_bytes(b"x" * (1024 * 1024 + 1))
-    big = relay_engine.relay(f"[[BGM:{big_file.resolve()}]]")
-    check("超大小文件被拒绝", big is not None and big.paths == [], str(big))
-
-    big_file.unlink()
-    outside.unlink()
-    text_file.unlink()
-    relay_file.unlink()
 
     print()
     if failures:
