@@ -1825,7 +1825,17 @@ def main():
     check("unsloth_music 模板已入 schema", "unsloth_music" in inst._engine_templates())
     check(
         "unsloth_music 模板字段完整",
-        {"api_base", "model", "style_prompt", "lyrics", "duration", "require_marker"}
+        {
+            "api_base",
+            "model",
+            "chat_model",
+            "chat_prompt",
+            "chat_timeout",
+            "style_prompt",
+            "lyrics",
+            "duration",
+            "require_marker",
+        }
         <= set(inst._engine_templates()["unsloth_music"]["items"]),
     )
     check("注册音乐钩子", hasattr(inst, "music_hook"))
@@ -1944,6 +1954,85 @@ def main():
     check("音乐请求有歌词不传 instrumental", "instrumental" not in body, str(body))
     check("音乐请求带时长", body.get("duration_s") == 45.0, str(body))
     check("音乐下载带 Bearer", requests[1][2] == "Bearer k", str(requests[1][:3]))
+
+    music_v1 = Music(
+        {
+            "instance_name": "music-v1",
+            "api_key": "k",
+            "api_base": "http://192.168.10.2:8908/v1",
+        }
+    )
+    check("音乐 api_base 去 /v1", music_v1.api_base == "http://192.168.10.2:8908")
+
+    chat_requests = []
+
+    def _chat_handler(request: httpx.Request) -> httpx.Response:
+        chat_requests.append((request.url.path, request.content))
+        if request.url.path == "/v1/chat/completions":
+            content = json.dumps(
+                {
+                    "style": "generated synth pop",
+                    "lyrics": "[verse]\nGenerated line",
+                },
+                ensure_ascii=False,
+            )
+            return httpx.Response(
+                200, json={"choices": [{"message": {"content": content}}]}
+            )
+        if request.url.path == "/v1/audio/run":
+            return httpx.Response(
+                200,
+                json={
+                    "clips": [
+                        {
+                            "id": "clip-2",
+                            "url": "/v1/audio/gallery/clip-2/file",
+                        }
+                    ]
+                },
+            )
+        if request.url.path == "/v1/audio/gallery/clip-2/file":
+            return httpx.Response(200, content=b"SONGDATA")
+        return httpx.Response(404)
+
+    chat_music = Music(
+        {
+            "instance_name": "chat-music",
+            "api_key": "k",
+            "api_base": "http://192.168.10.2:8908/v1",
+            "chat_model": "chat-model",
+            "duration": 30,
+        }
+    )
+    chat_music._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(_chat_handler)
+    )
+
+    async def _run_chat_music():
+        result = await chat_music.synthesize("[[MUSIC]]\n帮我写一首关于城市的歌")
+        await chat_music.close()
+        return result
+
+    chat_audio, chat_fmt = asyncio.run(_run_chat_music())
+    check("chat 生成后音乐合成", (chat_audio, chat_fmt) == (b"SONGDATA", "wav"))
+    check(
+        "先调用 chat 模型",
+        chat_requests[0][0] == "/v1/chat/completions",
+        str([r[0] for r in chat_requests]),
+    )
+    chat_body = json.loads(chat_requests[0][1])
+    check("chat 使用配置模型", chat_body.get("model") == "chat-model", str(chat_body))
+    run_body = json.loads(chat_requests[1][1])
+    check(
+        "音乐使用 chat 生成的风格",
+        run_body.get("text") == "generated synth pop",
+        str(run_body),
+    )
+    check(
+        "音乐使用 chat 生成的歌词",
+        run_body.get("lyrics") == "[verse]\nGenerated line",
+        str(run_body),
+    )
 
     print()
     if failures:

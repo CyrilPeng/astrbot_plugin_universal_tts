@@ -113,6 +113,8 @@ LLM 最终回复写成：
 ```
 
 - `[[MUSIC]]` 标记会触发音乐生成；默认 `require_marker: true`
+- 回复里带 JSON → 直接使用其中的 `style` / `lyrics`
+- 回复里没有 JSON 且配置了 `chat_model` → 先调用 `/v1/chat/completions` 生成 `style` / `lyrics`，再调用 `/v1/audio/run`
 - 有 `lyrics` → 人声歌曲；没有 `lyrics` → 器乐
 - 生成成功后，标记和 JSON 会被移除，替换成一条 `Comp.Record` 语音
 - 生成失败会回复“歌曲生成失败，请稍后重试”，不会把结构化 JSON 发给用户
@@ -123,8 +125,11 @@ LLM 最终回复写成：
 | 配置项 | 说明 |
 |---|---|
 | `api_key` | Studio API Key |
-| `api_base` | Studio 地址，默认 `http://127.0.0.1:8888`，不要带 `/v1` |
+| `api_base` | Studio 地址，默认 `http://127.0.0.1:8888`；带不带 `/v1` 都可以，插件会自动归一化 |
 | `model` | 音乐模型 ID；留空使用 Studio 当前加载的模型 |
+| `chat_model` | 先生成风格/歌词的 chat 模型；留空则直接使用回复 JSON 或默认风格 |
+| `chat_prompt` | chat 模型提示词；留空使用内置 JSON 输出提示词 |
+| `chat_timeout` | chat 模型超时，默认 120 秒 |
 | `style_prompt` | 回复没有 `style` 时的默认风格 |
 | `lyrics` | 回复没有 `lyrics` 时的默认歌词；留空为器乐 |
 | `duration` | 默认时长，默认 30 秒 |
