@@ -19,6 +19,7 @@
 | **阿里云百炼** | CosyVoice | DashScope 兼容接口 |
 | **Azure** | Cognitive Services | SSML + 情感风格 |
 | **ElevenLabs** | Text-to-Speech | 多语言高保真语音 |
+| **Unsloth** | 歌曲/音乐 | 调用 `/v1/audio/run`，按 `[[MUSIC]]` + JSON 生成歌曲/配乐 |
 | **自定义** | HTTP TTS | 模板化接入任意 HTTP TTS API |
 
 ---
@@ -95,6 +96,52 @@ POST {api_base}/audio/speech                 {"model", "voice", "input", "respon
 ### 与自定义 HTTP TTS 的区别
 
 `[自定义] HTTP TTS` 只在一次请求里替换占位符，不会执行「上传样本 → 创建音色」两步；而 Unsloth `/v1/audio/speech` 只接受已保存音色的 id，不接受内联音频。OpenAI 兼容克隆引擎用于这种两步式接口。
+
+---
+
+## 歌曲/音乐生成（Unsloth `/v1/audio/run`）
+
+调用本地 Unsloth Studio 音乐模型生成歌曲/配乐，并把结果挂到**当前被动回复**；群聊里不需要主动消息权限。
+
+### 回复格式
+
+LLM 最终回复写成：
+
+```text
+[[MUSIC]]
+{"style": "upbeat synth pop with a catchy chorus", "lyrics": "[verse]\nCity lights are calling me\n[chorus]\nWe dance until the morning", "duration": 60}
+```
+
+- `[[MUSIC]]` 标记会触发音乐生成；默认 `require_marker: true`
+- 有 `lyrics` → 人声歌曲；没有 `lyrics` → 器乐
+- 生成成功后，标记和 JSON 会被移除，替换成一条 `Comp.Record` 语音
+- 生成失败会回复“歌曲生成失败，请稍后重试”，不会把结构化 JSON 发给用户
+- 音乐引擎绕过 TTS 触发概率、字数上限、智能跳过和用户意图跳过；只受插件总开关和 `/tts_off` 控制
+
+### 配置项
+
+| 配置项 | 说明 |
+|---|---|
+| `api_key` | Studio API Key |
+| `api_base` | Studio 地址，默认 `http://127.0.0.1:8888`，不要带 `/v1` |
+| `model` | 音乐模型 ID；留空使用 Studio 当前加载的模型 |
+| `style_prompt` | 回复没有 `style` 时的默认风格 |
+| `lyrics` | 回复没有 `lyrics` 时的默认歌词；留空为器乐 |
+| `duration` | 默认时长，默认 30 秒 |
+| `require_marker` | 是否必须带 `[[MUSIC]]` 标记，默认开启 |
+| `timeout` | 生成超时，默认 1800 秒 |
+
+### 与 bgm-generation skill 配合
+
+bgm-generation 负责根据用户需求组织风格和歌词；它的 `--payload` 模式会输出：
+
+```json
+{"style": "...", "lyrics": "...", "duration": 60}
+```
+
+把这段 JSON 放到 `[[MUSIC]]` 后面作为最终回复即可，插件会调用 `/v1/audio/run` 并把歌曲挂到被动回复。
+
+> 音乐生成可能需要几十秒到几分钟；回复会等待生成完成，超过平台回复窗口时可能被平台截断。
 
 ---
 

@@ -801,12 +801,98 @@ class UniversalTTSPlugin(Star):
         except Exception as e:
             logger.debug(f"[UniversalTTS] 抑制核心 TTS 失败（忽略）: {e}")
 
+    @filter.on_decorating_result(priority=-1)
+    async def music_hook(self, event: AstrMessageEvent):
+        """歌曲/音乐引擎：调用 /v1/audio/run，把结果挂到当前被动回复。
+
+        音乐不是 TTS，因此这里绕过触发概率、字数上限、智能跳过和用户意图跳过；
+        只受插件总开关和 /tts_off 控制。
+        """
+        if not self.config.get("enable", True):
+            return
+        if not self._runtime_enabled:
+            return
+        result = event.get_result() if event is not None else None
+        if not result or not result.chain or not result.is_llm_result():
+            return
+
+        text_parts = [
+            component.text
+            for component in result.chain
+            if isinstance(component, Comp.Plain) and component.text
+        ]
+        full_text = "".join(text_parts).strip()
+        if not full_text:
+            return
+
+        session_id = _get_session_id(event)
+        engine = self._get_engine_for_session(session_id)
+        if engine is None or not getattr(engine, "is_music", False):
+            return
+
+        if getattr(engine, "require_marker", True) and not engine.has_marker(full_text):
+            # 没有 [[MUSIC]] 标记：普通文本回复，不生成歌曲，也不让核心 TTS 朗读。
+            self._suppress_core_tts(result)
+            event._universal_tts_music_handled = True
+            return
+
+        try:
+            audio_bytes, fmt = await self._synthesize_with_stats(engine, full_text)
+            audio_path = self._temp_dir / f"music_{uuid.uuid4().hex}.{fmt}"
+            await asyncio.to_thread(audio_path.write_bytes, audio_bytes)
+            self._cleanup_temp_files()
+
+            audio_path_str = str(audio_path)
+            self._tts_audio_text[audio_path_str] = full_text
+            self._last_tts_text[session_id] = full_text
+            self._record_activity(session_id, engine.instance_name)
+
+            record = Comp.Record(file=audio_path_str, url=audio_path_str)
+            original_chain = list(result.chain)
+            new_chain = []
+            inserted = False
+            for component in result.chain:
+                if isinstance(component, Comp.Plain):
+                    if component.text and not inserted:
+                        new_chain.append(record)
+                        inserted = True
+                    continue
+                new_chain.append(component)
+            result.chain = new_chain
+            # 发送失败时不要把 [[MUSIC]] JSON 当文本发出去。
+            fallback_chain = [Comp.Plain("歌曲发送失败，请稍后重试")]
+            fallback_chain.extend(
+                component
+                for component in original_chain
+                if not isinstance(component, Comp.Plain)
+            )
+            self._install_send_fallback(event, result, fallback_chain)
+            logger.info(
+                f"[UniversalTTS] 发送歌曲 ({engine.instance_name}): {full_text[:80]}"
+            )
+        except Exception as e:
+            logger.error(
+                f"[UniversalTTS] 歌曲生成失败 ({engine.instance_name}): "
+                f"{type(e).__name__}: {e}"
+            )
+            # 不要把结构化 prompt/JSON 原样发给用户。
+            result.chain = [Comp.Plain("歌曲生成失败，请稍后重试")]
+            self._suppress_core_tts(result)
+        event._universal_tts_music_handled = True
+
     @filter.on_decorating_result(priority=0)
     async def tts_hook(self, event: AstrMessageEvent):
         """钩子：在消息发送前将文本转为语音"""
         if not self.config.get("enable", True):
             # 插件总开关关闭：交还给 AstrBot 原生行为（核心 TTS 若配置了提供商会照常工作）。
             return
+        if getattr(event, "_universal_tts_music_handled", False):
+            return
+        if event is not None:
+            session_engine = self._get_engine_for_session(_get_session_id(event))
+            if session_engine is not None and getattr(session_engine, "is_music", False):
+                # 音乐引擎由 music_hook 处理，避免 TTS 抢先合成。
+                return
 
         result = event.get_result() if event is not None else None
 

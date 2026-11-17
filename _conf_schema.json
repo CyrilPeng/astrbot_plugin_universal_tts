@@ -664,6 +664,62 @@
           }
         }
       },
+      "unsloth_music": {
+        "name": "[Unsloth] 歌曲/音乐（/v1/audio/run）",
+        "hint": "调用本地 Unsloth Studio 音乐模型生成歌曲/配乐；LLM 回复用 [[MUSIC]] + JSON 提供风格和歌词。",
+        "items": {
+          "instance_name": {
+            "description": "实例名称（用于标识和切换）",
+            "type": "string",
+            "default": "unsloth_music"
+          },
+          "api_key": {
+            "description": "API Key",
+            "type": "string",
+            "default": ""
+          },
+          "api_base": {
+            "description": "API Base URL",
+            "type": "string",
+            "default": "http://127.0.0.1:8888",
+            "hint": "Studio 地址，不要带 /v1"
+          },
+          "model": {
+            "description": "音乐模型 ID",
+            "type": "string",
+            "default": "",
+            "hint": "留空则使用 Studio 当前加载的模型；例如 audio-cpp/audio.cpp-gguf/Stable-Audio-3-Small-Music-GGUF"
+          },
+          "style_prompt": {
+            "description": "默认风格提示词",
+            "type": "text",
+            "default": "",
+            "hint": "回复里没有 JSON/style 时使用；留空则用整段回复文本"
+          },
+          "lyrics": {
+            "description": "默认歌词",
+            "type": "text",
+            "default": "",
+            "hint": "回复里没有 lyrics 时使用；留空则生成器乐"
+          },
+          "duration": {
+            "description": "默认时长（秒）",
+            "type": "int",
+            "default": 30
+          },
+          "require_marker": {
+            "description": "需要 [[MUSIC]] 标记",
+            "type": "bool",
+            "default": true,
+            "hint": "开启后只有回复里带 [[MUSIC]] 标记才生成歌曲；关闭则绑定后每条回复都尝试生成"
+          },
+          "timeout": {
+            "description": "超时（秒）",
+            "type": "int",
+            "default": 1800
+          }
+        }
+      },
       "custom_http": {
         "name": "[自定义] HTTP TTS（模板化接入任意 API）",
         "hint": "占位符: ${TEXT}、${TEXT_JSON}、${API_KEY}、${VOICE_SAMPLE_BASE64}、${VOICE_SAMPLE_BASE64_RAW}、${VOICE_SAMPLE_PATH}",

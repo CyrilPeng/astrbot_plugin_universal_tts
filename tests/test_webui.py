@@ -340,7 +340,7 @@ def main():
     check("_secrets 标记正确", e0["_secrets"] == ["api_key"], str(e0.get("_secrets")))
     check("空密钥不列入 _secrets", e1["_secrets"] == [])
     check("非敏感字段保留", e0["api_base"].endswith("/v1"))
-    check("templates 已返回", len(payload["templates"]) == 10, str(len(payload["templates"])))
+    check("templates 已返回", len(payload["templates"]) == 11, str(len(payload["templates"])))
 
     print("\n[3] 字段类型转换")
     check("int 转换", inst._coerce_field("30", "int", 0) == 30)
@@ -1799,6 +1799,107 @@ def main():
     )
     module.get_engine = original_get_engine
     web.request.query = {}
+
+    print("\n[41] Unsloth 歌曲引擎")
+
+    Music = _pkg.UnslothMusicEngine
+    check("unsloth_music 已注册", _pkg.ENGINE_REGISTRY.get("unsloth_music") is Music)
+    check("unsloth_music 模板已入 schema", "unsloth_music" in inst._engine_templates())
+    check(
+        "unsloth_music 模板字段完整",
+        {"api_base", "model", "style_prompt", "lyrics", "duration", "require_marker"}
+        <= set(inst._engine_templates()["unsloth_music"]["items"]),
+    )
+    check("注册音乐钩子", hasattr(inst, "music_hook"))
+    check(
+        "TTS 钩子跳过音乐结果",
+        "_universal_tts_music_handled" in inspect.getsource(inst.tts_hook),
+    )
+
+    music = Music(
+        {
+            "instance_name": "music",
+            "api_key": "k",
+            "api_base": "http://127.0.0.1:8888/",
+            "model": "audio-cpp/audio.cpp-gguf/Stable-Audio-3-Small-Music-GGUF",
+            "duration": 30,
+        }
+    )
+    check("音乐 api_base 去尾斜杠", music.api_base == "http://127.0.0.1:8888")
+    check("音乐默认要求标记", music.require_marker is True)
+    check("音乐有标记", music.has_marker("[[MUSIC]] {}"))
+    check("音乐无标记", not music.has_marker("普通文本"))
+
+    parsed = music._parse_reply(
+        '[[MUSIC]]\n'
+        '{"style": "upbeat synth pop", "lyrics": "[verse]\\nCity lights", "duration": 45}'
+    )
+    check("音乐解析风格", parsed["style"] == "upbeat synth pop", str(parsed))
+    check("音乐解析歌词", parsed["lyrics"] == "[verse]\nCity lights", str(parsed))
+    check("音乐解析时长", parsed["duration"] == 45.0, str(parsed))
+
+    no_marker = music._parse_reply("calm acoustic guitar")
+    check(
+        "无标记用全文作风格",
+        no_marker["style"] == "calm acoustic guitar",
+        str(no_marker),
+    )
+    check("无标记无歌词", no_marker["lyrics"] == "", str(no_marker))
+
+    try:
+        asyncio.run(music.synthesize("calm acoustic guitar"))
+        check("无标记不合成", False)
+    except RuntimeError:
+        check("无标记不合成", True)
+
+    requests = []
+
+    def _music_handler(request: httpx.Request) -> httpx.Response:
+        requests.append(
+            (
+                request.method,
+                request.url.path,
+                request.headers.get("authorization"),
+                request.content,
+            )
+        )
+        if request.url.path == "/v1/audio/run":
+            return httpx.Response(
+                200,
+                json={
+                    "clips": [
+                        {
+                            "id": "clip-1",
+                            "url": "/v1/audio/gallery/clip-1/file",
+                            "duration_s": 45.0,
+                        }
+                    ]
+                },
+            )
+        if request.url.path == "/v1/audio/gallery/clip-1/file":
+            return httpx.Response(200, content=b"WAVDATA")
+        return httpx.Response(404)
+
+    music._client = httpx.AsyncClient(transport=httpx.MockTransport(_music_handler))
+
+    async def _run_music():
+        result = await music.synthesize(
+            '[[MUSIC]]\n'
+            '{"style": "upbeat synth pop", "lyrics": "[verse]\\nCity lights", "duration": 45}'
+        )
+        await music.close()
+        return result
+
+    audio, fmt = asyncio.run(_run_music())
+    check("音乐合成返回音频", (audio, fmt) == (b"WAVDATA", "wav"), f"{audio!r} {fmt!r}")
+    check("音乐请求带 Bearer", requests[0][2] == "Bearer k", str(requests[0][:3]))
+    body = json.loads(requests[0][3])
+    check("音乐请求 workflow", body.get("workflow") == "music", str(body))
+    check("音乐请求 mode", body.get("mode") == "song", str(body))
+    check("音乐请求带歌词", body.get("lyrics") == "[verse]\nCity lights", str(body))
+    check("音乐请求有歌词不传 instrumental", "instrumental" not in body, str(body))
+    check("音乐请求带时长", body.get("duration_s") == 45.0, str(body))
+    check("音乐下载带 Bearer", requests[1][2] == "Bearer k", str(requests[1][:3]))
 
     print()
     if failures:
