@@ -137,6 +137,9 @@ HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive:Q6_K
 
 规则：
 
+- 一次回复只判定一种模式：`music` / `tts` / `none`
+- 命中音乐后**不会再触发 TTS**；普通对话只走 TTS
+- 两个钩子各自独立判定模式，不依赖相对优先级
 - 用户消息命中 `music_route_patterns`，或回复带 `[[MUSIC]]` → 使用**第一个音乐引擎**
 - 其它回复 → 使用会话绑定/全局 TTS 引擎
 - 如果会话绑定/全局是音乐引擎，普通对话会回退到第一个非音乐 TTS 引擎

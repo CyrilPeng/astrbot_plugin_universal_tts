@@ -1844,16 +1844,24 @@ def main():
     )
     check("注册音乐钩子", hasattr(inst, "music_hook"))
     check(
-        "TTS 钩子跳过音乐结果",
-        "_universal_tts_music_handled" in inspect.getsource(inst.tts_hook),
+        "音乐钩子优先于 TTS",
+        "priority=1" in inspect.getsource(inst.music_hook),
+    )
+    check(
+        "TTS 钩子不再误标音乐结果",
+        "_should_route_to_music" not in inspect.getsource(inst.tts_hook),
+    )
+    check(
+        "TTS 钩子按模式互斥",
+        "_decide_reply_mode" in inspect.getsource(inst.tts_hook),
     )
     check(
         "音乐钩子使用用户输入",
         "message_str" in inspect.getsource(inst.music_hook),
     )
     check(
-        "音乐钩子支持自动路由",
-        "music_auto_route" in inspect.getsource(inst.music_hook),
+        "音乐钩子按模式互斥",
+        "_decide_reply_mode" in inspect.getsource(inst.music_hook),
     )
     check(
         "TTS 钩子排除音乐引擎",
@@ -1883,6 +1891,25 @@ def main():
         inst._should_route_to_music("写一首歌", "[[MUSIC]]") is False,
     )
     inst.config["music_auto_route"] = True
+
+    check(
+        "模式-音乐",
+        inst._decide_reply_mode("sid", "写一首歌", "") == "music",
+    )
+    check(
+        "模式-普通",
+        inst._decide_reply_mode("sid", "今天天气不错", "") == "tts",
+    )
+    check(
+        "模式-标记",
+        inst._decide_reply_mode("sid", "你好", "[[MUSIC]]") == "music",
+    )
+    inst._session_bindings["sid"] = module.DISABLED_ENGINE
+    check(
+        "模式-禁音",
+        inst._decide_reply_mode("sid", "写一首歌", "") == "none",
+    )
+    inst._session_bindings.pop("sid", None)
 
     payload_music = inst._build_engines_payload()
     check(

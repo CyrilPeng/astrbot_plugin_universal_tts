@@ -729,6 +729,31 @@ class UniversalTTSPlugin(Star):
                     )
         return False
 
+    def _decide_reply_mode(
+        self, session_id: str, user_text: str, reply_text: str
+    ) -> str:
+        """一次回复只决定一种模式：music / tts / none。
+
+        两个钩子都独立调用这个判定，只有匹配自己模式的钩子才执行，
+        不依赖钩子之间的相对优先级。
+        """
+        if self._session_bindings.get(session_id) == DISABLED_ENGINE:
+            return "none"
+        if self.config.get("music_auto_route", True):
+            return (
+                "music"
+                if self._should_route_to_music(user_text, reply_text)
+                else "tts"
+            )
+        # 手动绑定模式：绑定/全局是音乐引擎时，按 require_marker 决定。
+        engine = self._get_engine_for_session(session_id)
+        if engine is not None and getattr(engine, "is_music", False):
+            if not getattr(engine, "require_marker", True):
+                return "music"
+            has_marker = getattr(engine, "has_marker", None)
+            return "music" if callable(has_marker) and has_marker(reply_text) else "tts"
+        return "tts"
+
     def _get_engine_for_session(
         self, session_id: str, allow_music: bool = True
     ) -> TTSEngine | None:
@@ -890,7 +915,9 @@ class UniversalTTSPlugin(Star):
         except Exception as e:
             logger.debug(f"[UniversalTTS] 抑制核心 TTS 失败（忽略）: {e}")
 
-    @filter.on_decorating_result(priority=-1)
+    # AstrBot 按 priority 从大到小执行；必须高于 tts_hook(0)，
+    # 否则 tts_hook 会先把结果标成 GENERAL_RESULT，music_hook 就不再生效。
+    @filter.on_decorating_result(priority=1)
     async def music_hook(self, event: AstrMessageEvent):
         """歌曲/音乐引擎：调用 /v1/audio/run，把结果挂到当前被动回复。
 
@@ -915,35 +942,20 @@ class UniversalTTSPlugin(Star):
             return
 
         session_id = _get_session_id(event)
-        if self._session_bindings.get(session_id) == DISABLED_ENGINE:
-            self._suppress_core_tts(result)
+        user_text = str(getattr(event, "message_str", "") or "").strip()
+        if self._decide_reply_mode(session_id, user_text, full_text) != "music":
             return
 
-        user_text = str(getattr(event, "message_str", "") or "").strip()
-        auto_route = bool(self.config.get("music_auto_route", True))
-        if auto_route:
-            if not self._should_route_to_music(user_text, full_text):
-                return
-            engine = self._get_music_engine(session_id)
-            if engine is None:
-                logger.warning(
-                    "[UniversalTTS] 命中音乐需求，但没有配置 [Unsloth] 歌曲/音乐 引擎"
-                )
-                self._suppress_core_tts(result)
-                result.chain = [
-                    Comp.Plain("音乐引擎未配置，请在插件中添加 [Unsloth] 歌曲/音乐 引擎")
-                ]
-                event._universal_tts_music_handled = True
-                return
-        else:
-            engine = self._get_engine_for_session(session_id)
-            if engine is None or not getattr(engine, "is_music", False):
-                return
-            if getattr(engine, "require_marker", True) and not engine.has_marker(full_text):
-                # 手动绑定模式：没有 [[MUSIC]] 标记时按普通文本处理。
-                self._suppress_core_tts(result)
-                event._universal_tts_music_handled = True
-                return
+        engine = self._get_music_engine(session_id)
+        if engine is None:
+            logger.warning(
+                "[UniversalTTS] 命中音乐需求，但没有配置 [Unsloth] 歌曲/音乐 引擎"
+            )
+            self._suppress_core_tts(result)
+            result.chain = [
+                Comp.Plain("音乐引擎未配置，请在插件中添加 [Unsloth] 歌曲/音乐 引擎")
+            ]
+            return
 
         try:
             # 用户输入才是歌词/风格的来源；LLM 回复只用来判断 [[MUSIC]] 标记。
@@ -989,7 +1001,6 @@ class UniversalTTSPlugin(Star):
             # 不要把结构化 prompt/JSON 原样发给用户。
             result.chain = [Comp.Plain("歌曲生成失败，请稍后重试")]
             self._suppress_core_tts(result)
-        event._universal_tts_music_handled = True
 
     @filter.on_decorating_result(priority=0)
     async def tts_hook(self, event: AstrMessageEvent):
@@ -997,9 +1008,6 @@ class UniversalTTSPlugin(Star):
         if not self.config.get("enable", True):
             # 插件总开关关闭：交还给 AstrBot 原生行为（核心 TTS 若配置了提供商会照常工作）。
             return
-        if getattr(event, "_universal_tts_music_handled", False):
-            return
-
         result = event.get_result() if event is not None else None
 
         if not self._runtime_enabled:
@@ -1008,6 +1016,29 @@ class UniversalTTSPlugin(Star):
                 self._suppress_core_tts(result)
             return
         if not await self._is_astrbot_tts_enabled(event):
+            return
+
+        if not result or not result.chain or not result.is_llm_result():
+            return
+        text_parts = [
+            component.text
+            for component in result.chain
+            if isinstance(component, Comp.Plain) and component.text
+        ]
+        if not text_parts:
+            return
+        full_text = "".join(text_parts).strip()
+        if len(full_text) < 1:
+            return
+
+        session_id = _get_session_id(event)
+        user_text = str(getattr(event, "message_str", "") or "").strip()
+        # 一次回复只允许一种模式：music 由 music_hook 处理，tts 由这里处理。
+        mode = self._decide_reply_mode(session_id, user_text, full_text)
+        if mode == "none":
+            self._suppress_core_tts(result)
+            return
+        if mode != "tts":
             return
 
         # TTS 触发概率
@@ -1019,33 +1050,6 @@ class UniversalTTSPlugin(Star):
         if probability < 100 and random.randint(1, 100) > probability:
             if result:
                 self._suppress_core_tts(result)
-            return
-
-        if not result or not result.chain:
-            return
-
-        if not result.is_llm_result():
-            return
-
-        # 收集所有文本
-        text_parts = []
-        for component in result.chain:
-            if isinstance(component, Comp.Plain) and component.text:
-                text_parts.append(component.text)
-
-        if not text_parts:
-            return
-
-        full_text = "".join(text_parts).strip()
-        if len(full_text) < 1:
-            return
-
-        user_text = str(getattr(event, "message_str", "") or "").strip()
-        # 音乐请求交给 music_hook；避免 TTS 抢先合成。
-        if self.config.get("music_auto_route", True) and self._should_route_to_music(
-            user_text, full_text
-        ):
-            self._suppress_core_tts(result)
             return
 
         # 用户意图跳过：介绍/解释/名称/步骤/价格等知识型提问优先返回文本。
@@ -1074,12 +1078,7 @@ class UniversalTTSPlugin(Star):
             self._suppress_core_tts(result)
             return
 
-        # 获取当前会话应使用的引擎
-        session_id = _get_session_id(event)
-        # 会话被 /tts_bind 0 禁音：明确不合成，同样抑制核心 TTS 接管。
-        if self._session_bindings.get(session_id) == DISABLED_ENGINE:
-            self._suppress_core_tts(result)
-            return
+        # 模式已判定为 tts，取非音乐引擎合成。
         engine = self._get_engine_for_session(session_id, allow_music=False)
         if engine is None:
             return
