@@ -7,6 +7,8 @@ import inspect
 import json
 import random
 import re
+import shutil
+import subprocess
 import time
 import uuid
 from pathlib import Path
@@ -29,6 +31,12 @@ try:
     from astrbot.core.message.message_event_result import ResultContentType
 except Exception:  # pragma: no cover - 旧版本 AstrBot
     ResultContentType = None
+
+# 音频中转发送失败时，用 MessageChain 逐段补发；旧版本没有该符号时静默降级。
+try:
+    from astrbot.core.message.message_event_result import MessageChain
+except Exception:  # pragma: no cover - 旧版本 AstrBot
+    MessageChain = None
 
 # WebUI（插件可视化视图）后端 API 依赖 AstrBot >= 4.25.0。
 # 导入失败时静默降级：旧版本会忽略 views/ 目录，插件其余功能完全不受影响。
@@ -801,12 +809,133 @@ class UniversalTTSPlugin(Star):
         except Exception as e:
             logger.debug(f"[UniversalTTS] 抑制核心 TTS 失败（忽略）: {e}")
 
+    @filter.on_decorating_result(priority=-1)
+    async def relay_hook(self, event: AstrMessageEvent):
+        """音频中转：把 [[BGM:路径]] 标记挂到当前被动回复。
+
+        只处理配置为 audio_relay 的会话；命中后设置标记，tts_hook 会直接跳过。
+        这样走的是被动回复，不需要平台的主动消息权限。
+        """
+        if not self.config.get("enable", True):
+            return
+        if not self._runtime_enabled:
+            return
+        result = event.get_result() if event is not None else None
+        if not result or not result.chain or not result.is_llm_result():
+            return
+
+        text_parts = [
+            component.text
+            for component in result.chain
+            if isinstance(component, Comp.Plain) and component.text
+        ]
+        full_text = "".join(text_parts).strip()
+        if not full_text:
+            return
+
+        session_id = _get_session_id(event)
+        engine = self._get_engine_for_session(session_id)
+        if engine is None or not getattr(engine, "is_relay", False):
+            return
+
+        try:
+            await self._handle_relay(event, result, full_text, engine)
+        except Exception as e:
+            logger.error(f"[UniversalTTS] 音频中转失败: {type(e).__name__}: {e}")
+            self._suppress_core_tts(result)
+        event._universal_tts_relay_handled = True
+
+    async def _handle_relay(
+        self, event: AstrMessageEvent, result, text: str, engine: TTSEngine
+    ) -> None:
+        """解析标记、校验文件，并把 Record 插入当前回复链。"""
+        session_id = _get_session_id(event)
+        try:
+            relay = engine.relay(text)
+        except Exception as e:
+            logger.error(f"[UniversalTTS] 音频标记解析失败: {type(e).__name__}: {e}")
+            relay = None
+
+        if relay is None:
+            # 没有标记：普通文本回复保持原样，同时阻止核心 TTS 朗读。
+            self._suppress_core_tts(result)
+            return
+
+        for error in relay.errors:
+            logger.warning(f"[UniversalTTS] 音频标记已忽略: {error}")
+
+        non_plain = [
+            component
+            for component in result.chain
+            if not isinstance(component, Comp.Plain)
+        ]
+        records = []
+        relay_paths = []
+        for path in relay.paths:
+            try:
+                record = Comp.Record.fromFileSystem(path=str(path))
+            except Exception as e:
+                logger.warning(f"[UniversalTTS] 音频组件创建失败 {path}: {e}")
+                continue
+            records.append(record)
+            relay_paths.append(str(path))
+            self._tts_audio_text[str(path)] = relay.clean_text or "音频"
+            self._tts_audio_text[str(getattr(record, "file", "") or "")] = (
+                relay.clean_text or "音频"
+            )
+
+        if records:
+            new_chain = []
+            inserted = False
+            for component in result.chain:
+                if isinstance(component, Comp.Plain):
+                    if not inserted:
+                        if relay.keep_text and relay.clean_text:
+                            new_chain.append(Comp.Plain(relay.clean_text))
+                        new_chain.extend(records)
+                        inserted = True
+                    continue
+                new_chain.append(component)
+            if not inserted:
+                if relay.keep_text and relay.clean_text:
+                    new_chain.append(Comp.Plain(relay.clean_text))
+                new_chain.extend(records)
+            result.chain = new_chain
+
+            self._last_tts_text[session_id] = relay.clean_text or "音频"
+            self._record_activity(session_id, engine.instance_name)
+
+            fallback_chain = list(non_plain)
+            if relay.clean_text:
+                fallback_chain.insert(0, Comp.Plain(relay.clean_text))
+            self._install_send_fallback(
+                event,
+                result,
+                fallback_chain,
+                relay_paths=relay_paths,
+                segment_seconds=getattr(engine, "segment_seconds", 60),
+            )
+        else:
+            # 标记存在但音频无效：去掉标记后按文本发送。
+            fallback_text = relay.clean_text or "音频准备失败"
+            result.chain = [Comp.Plain(fallback_text), *non_plain]
+            self._install_send_fallback(event, result, list(result.chain))
+
+        self._suppress_core_tts(result)
+
     @filter.on_decorating_result(priority=0)
     async def tts_hook(self, event: AstrMessageEvent):
         """钩子：在消息发送前将文本转为语音"""
         if not self.config.get("enable", True):
             # 插件总开关关闭：交还给 AstrBot 原生行为（核心 TTS 若配置了提供商会照常工作）。
             return
+        if getattr(event, "_universal_tts_relay_handled", False):
+            return
+        if event is not None:
+            session_engine = self._get_engine_for_session(_get_session_id(event))
+            if session_engine is not None and getattr(session_engine, "is_relay", False):
+                # 中转引擎由 relay_hook 处理，避免 TTS 抢先合成。
+                return
 
         result = event.get_result() if event is not None else None
 
@@ -923,15 +1052,23 @@ class UniversalTTSPlugin(Star):
         self._install_send_fallback(event, result, original_chain)
 
     def _install_send_fallback(
-        self, event: AstrMessageEvent, result, original_chain: list
+        self,
+        event: AstrMessageEvent,
+        result,
+        original_chain: list,
+        relay_paths: list[str] | None = None,
+        segment_seconds: int = 60,
     ) -> None:
-        """包装 event.send：语音发送失败时改发原始文本。
+        """包装 event.send：语音发送失败时先分段补发，再回退文本。
 
-        AstrBot 的 respond 阶段用 try/except 包住 event.send 且只写日志，
-        发送失败时用户侧完全静默。这里在事件实例上包一层，失败时补发文本，
-        成功时行为与原来完全一致。
+        - 带 ``relay_paths`` 时，优先用 ffmpeg 按 ``segment_seconds`` 切开逐段发送；
+        - 分段仍失败，或没有 relay_paths，再按配置回退为原始文本；
+        - AstrBot 的 respond 阶段只写日志，用户侧会静默，所以这里必须兜底。
         """
-        if not self.config.get("fallback_to_text_on_send_error", True):
+        fallback_text_enabled = bool(
+            self.config.get("fallback_to_text_on_send_error", True)
+        )
+        if not fallback_text_enabled and not relay_paths:
             return
 
         original_send = getattr(event, "send", None)
@@ -944,7 +1081,7 @@ class UniversalTTSPlugin(Star):
             fallback_chain = result.derive(list(original_chain))
         except Exception as e:
             logger.debug(f"[UniversalTTS] 构造文本回退链失败，跳过回退: {e}")
-            return
+            fallback_chain = None
 
         state = {"used": False}
 
@@ -953,11 +1090,40 @@ class UniversalTTSPlugin(Star):
                 return await original_send(chain)
             except Exception as e:
                 logger.error(
-                    f"[UniversalTTS] 语音发送失败，回退为文本: {type(e).__name__}: {e}"
+                    f"[UniversalTTS] 语音发送失败: {type(e).__name__}: {e}"
                 )
                 if state["used"]:
                     raise
                 state["used"] = True
+
+                if relay_paths and MessageChain is not None:
+                    try:
+                        segments: list[Path] = []
+                        for raw in relay_paths:
+                            segments.extend(
+                                await asyncio.to_thread(
+                                    self._split_audio_file,
+                                    Path(raw),
+                                    int(segment_seconds or 60),
+                                )
+                            )
+                        # 只有一个文件且没真正切开时，避免原样重试同一个文件。
+                        if len(segments) > 1 or len(relay_paths) > 1:
+                            for segment in segments:
+                                record = Comp.Record.fromFileSystem(path=str(segment))
+                                await original_send(MessageChain(chain=[record]))
+                            logger.info(
+                                f"[UniversalTTS] 语音发送失败后已分段补发 {len(segments)} 段"
+                            )
+                            return
+                    except Exception as seg_err:
+                        logger.error(
+                            f"[UniversalTTS] 分段发送失败: "
+                            f"{type(seg_err).__name__}: {seg_err}"
+                        )
+
+                if not fallback_text_enabled or fallback_chain is None:
+                    raise
                 try:
                     return await original_send(fallback_chain)
                 except Exception as e2:
@@ -971,6 +1137,53 @@ class UniversalTTSPlugin(Star):
             event._universal_tts_send_wrapped = True
         except Exception as e:
             logger.debug(f"[UniversalTTS] 安装发送回退失败，已忽略: {e}")
+
+    def _split_audio_file(self, path: Path, seconds: int) -> list[Path]:
+        """用 ffmpeg 把音频切成 seconds 秒一段；失败返回空列表。"""
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg or not path.is_file():
+            return []
+        try:
+            path = path.resolve()
+            out_dir = self._temp_dir / f"relay_split_{uuid.uuid4().hex}"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            suffix = path.suffix or ".wav"
+            pattern = out_dir / f"part_%03d{suffix}"
+            seconds = max(5, int(seconds or 60))
+            codec = (
+                ["-c:a", "pcm_s16le"]
+                if suffix.lower() == ".wav"
+                else ["-c", "copy"]
+            )
+            command = [
+                ffmpeg,
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(path),
+                "-f",
+                "segment",
+                "-segment_time",
+                str(seconds),
+                "-reset_timestamps",
+                "1",
+                *codec,
+                str(pattern),
+            ]
+            proc = subprocess.run(
+                command, capture_output=True, text=True, timeout=300
+            )
+            if proc.returncode != 0:
+                logger.warning(
+                    f"[UniversalTTS] 音频切分失败: {(proc.stderr or '')[-300:]}"
+                )
+                return []
+            return sorted(out_dir.glob(f"part_*{suffix}"))
+        except Exception as e:
+            logger.warning(f"[UniversalTTS] 音频切分异常: {type(e).__name__}: {e}")
+            return []
 
     @filter.on_waiting_llm_request()
     async def tts_reply_fix(self, event: AstrMessageEvent):

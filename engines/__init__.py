@@ -3,6 +3,7 @@
 from .base import TTSEngine
 from .mimo import MiMoV25Engine, MiMoV25CloneEngine, MiMoV25DesignEngine
 from .openai import OpenAICloneEngine, OpenAICompatEngine
+from .relay import AudioRelayEngine
 from .volcengine import VolcengineEngine
 from .aliyun import AliyunEngine
 from .azure import AzureEngine
@@ -20,6 +21,7 @@ ENGINE_REGISTRY: dict[str, type[TTSEngine]] = {
     "azure": AzureEngine,
     "elevenlabs": ElevenLabsEngine,
     "custom_http": CustomHTTPEngine,
+    "audio_relay": AudioRelayEngine,
 }
 
 
