@@ -2,6 +2,7 @@
 
 from .base import TTSEngine
 from .mimo import MiMoV25Engine, MiMoV25CloneEngine, MiMoV25DesignEngine
+from .image import UnslothImageEngine
 from .music import UnslothMusicEngine
 from .openai import OpenAICloneEngine, OpenAICompatEngine
 from .volcengine import VolcengineEngine
@@ -22,6 +23,7 @@ ENGINE_REGISTRY: dict[str, type[TTSEngine]] = {
     "elevenlabs": ElevenLabsEngine,
     "custom_http": CustomHTTPEngine,
     "unsloth_music": UnslothMusicEngine,
+    "unsloth_image": UnslothImageEngine,
 }
 
 

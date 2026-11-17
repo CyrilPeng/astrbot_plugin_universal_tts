@@ -20,6 +20,7 @@
 | **Azure** | Cognitive Services | SSML + 情感风格 |
 | **ElevenLabs** | Text-to-Speech | 多语言高保真语音 |
 | **Unsloth** | 歌曲/音乐 | 调用 `/v1/audio/run`，按 `[[MUSIC]]` + JSON 生成歌曲/配乐 |
+| **Unsloth** | 图片生成 | 调用 `/v1/images/generations`，用户未指定尺寸时用配置默认值 |
 | **自定义** | HTTP TTS | 模板化接入任意 HTTP TTS API |
 
 ---
@@ -166,10 +167,44 @@ bgm-generation 现在是一个轻量提示：识别 BGM/歌曲请求并回复 `[
 
 ---
 
+## 图片生成（Unsloth `/v1/images/generations`）
+
+调用本地 Unsloth Studio 图片模型，把结果挂到**当前被动回复**。
+
+### 触发
+
+- `image_auto_route` 默认开启
+- 用户消息命中图片需求，或回复带 `[[IMAGE]]` → 自动使用第一个图片引擎
+- 一次回复只走一种模式：图片、音乐、TTS 互斥
+- 普通对话和音乐请求不受影响
+
+### 尺寸
+
+- 用户消息里写了 `768x512`、`16:9`、`9:16`、`竖图`、`横图`、`方图` → 自动覆盖
+- 没写 → 使用图片引擎配置里的 `size`，默认 `1024x1024`
+
+### 配置项
+
+| 配置项 | 说明 |
+|---|---|
+| `api_key` | Studio API Key |
+| `api_base` | Studio 地址，默认 `http://127.0.0.1:8888`；带不带 `/v1` 都可以 |
+| `model` | 图片模型 ID，默认 `unsloth/FLUX.2-klein-4B-GGUF` |
+| `size` | 用户未指定尺寸时的默认值，默认 `1024x1024` |
+| `timeout` | 生成超时，默认 300 秒 |
+
+### 与 image-generation skill 的关系
+
+image-generation 是一个轻量提示：识别图片请求并回复 `[[IMAGE]]`。
+
+模型选择、API Key、默认尺寸、图片生成和发送全部由 universal_tts 插件完成；skill 不运行脚本、不调用 API、不生成图片文件。
+
+---
+
 ## 通用功能
 
 - 会话级引擎绑定：不同群聊/私聊可使用不同引擎
-- 自动内容路由：普通对话走 TTS，BGM/歌曲请求自动走音乐引擎
+- 自动内容路由：普通对话走 TTS，BGM/歌曲走音乐引擎，画图/图片请求走图片引擎
 - 运行时热切换引擎，无需重启
 - 全局 TTS 开关、单会话禁音、字数上限
 - 智能跳过：代码块、纯链接、自定义正则命中的回复不朗读

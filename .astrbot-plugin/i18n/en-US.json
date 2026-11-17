@@ -15,6 +15,8 @@
       "badge_default": "Default",
       "engine_music_badge": "Music",
       "engine_music_hint": "Auto-routed for BGM/song requests",
+      "engine_image_badge": "Image",
+      "engine_image_hint": "Auto-routed for image requests",
       "empty": "No engines configured yet. Use “New engine” in the top right to start.",
       "unnamed": "(unnamed)",
       "unknown_template": "Unknown type",

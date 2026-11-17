@@ -1,7 +1,7 @@
 name: astrbot_plugin_universal_tts
 display_name: 通用 TTS
-short_desc: 多引擎通用 TTS（原项目分支）：新增 OpenAI 兼容音色克隆（上传样本 → 保存音色 → 合成）
-desc: CyrilPeng/astrbot_plugin_universal_tts 的分支，保留原项目全部引擎与管理功能（MiMo V2.5、OpenAI 兼容、火山引擎、阿里云百炼、Azure、ElevenLabs、自定义 HTTP），新增 OpenAI 兼容音色克隆引擎：首次合成自动上传样本、创建并缓存 voice_id，适配 Unsloth Studio / audio.cpp 等两步式接口；并提供 WebUI 管理页、会话绑定、全局设置与配置导入导出。
+short_desc: 多引擎通用 TTS（原项目分支）：音色克隆 + 歌曲生成 + 图片生成 + 自动内容路由
+desc: CyrilPeng/astrbot_plugin_universal_tts 的分支，保留原项目全部引擎与管理功能（MiMo V2.5、OpenAI 兼容、火山引擎、阿里云百炼、Azure、ElevenLabs、自定义 HTTP），新增 OpenAI 兼容音色克隆、Unsloth 歌曲/音乐生成、Unsloth 图片生成，并按用户消息自动路由到 TTS/音乐/图片引擎；提供 WebUI 管理页、会话绑定、全局设置与配置导入导出。
 version: 1.4.5
 author: 某不科学的高数
 repo: https://github.com/PowerShadows-wq/astrbot_plugin_universal_tts.git
@@ -57,3 +57,5 @@ tags:
   - ElevenLabs
   - 自定义HTTP
   - 音色克隆
+  - 歌曲生成
+  - 图片生成

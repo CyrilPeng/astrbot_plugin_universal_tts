@@ -441,6 +441,16 @@ function renderRow(engine, index) {
     );
     name.appendChild(musicBadge);
   }
+  if (engine.is_image) {
+    const imageBadge = document.createElement("span");
+    imageBadge.className = "badge badge-image";
+    imageBadge.textContent = t("engine_image_badge", "图片");
+    imageBadge.title = t(
+      "engine_image_hint",
+      "命中图片请求时自动使用",
+    );
+    name.appendChild(imageBadge);
+  }
   main.appendChild(name);
 
   const meta = document.createElement("div");

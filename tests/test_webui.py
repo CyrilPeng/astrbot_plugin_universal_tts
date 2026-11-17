@@ -2,6 +2,7 @@
 
 import asyncio
 import atexit
+import base64
 import importlib.util
 import inspect
 import json
@@ -340,7 +341,7 @@ def main():
     check("_secrets 标记正确", e0["_secrets"] == ["api_key"], str(e0.get("_secrets")))
     check("空密钥不列入 _secrets", e1["_secrets"] == [])
     check("非敏感字段保留", e0["api_base"].endswith("/v1"))
-    check("templates 已返回", len(payload["templates"]) == 11, str(len(payload["templates"])))
+    check("templates 已返回", len(payload["templates"]) == 12, str(len(payload["templates"])))
     expected_templates = {
         "mimo_v2_5",
         "mimo_v2_5_voicedesign",
@@ -353,6 +354,7 @@ def main():
         "elevenlabs",
         "custom_http",
         "unsloth_music",
+        "unsloth_image",
     }
     check(
         "原有引擎模板全部保留",
@@ -684,7 +686,7 @@ def main():
     check("读取成功", res.get("__ok__") is True, str(res)[:160])
     payload = res.get("data") or {}
     fields = {f["key"]: f for f in payload.get("fields", [])}
-    check("返回 14 个字段", len(fields) == 14, str(sorted(fields)))
+    check("返回 16 个字段", len(fields) == 16, str(sorted(fields)))
     check("含智能跳过字段", "tts_skip_code_blocks" in fields and "tts_skip_patterns" in fields)
     check(
         "含用户意图跳过字段",
@@ -694,6 +696,11 @@ def main():
     check(
         "含音乐自动路由字段",
         "music_auto_route" in fields and "music_route_patterns" in fields,
+        str(sorted(fields)),
+    )
+    check(
+        "含图片自动路由字段",
+        "image_auto_route" in fields and "image_route_patterns" in fields,
         str(sorted(fields)),
     )
     check("不含 engines", "engines" not in fields)
@@ -1865,7 +1872,7 @@ def main():
     )
     check(
         "TTS 钩子排除音乐引擎",
-        "allow_music=False" in inspect.getsource(inst.tts_hook),
+        "allow_special=False" in inspect.getsource(inst.tts_hook),
     )
 
     inst.config["music_auto_route"] = True
@@ -2094,6 +2101,155 @@ def main():
             f"{engine_name} 不是音乐引擎",
             not getattr(engine_cls, "is_music", False),
         )
+
+    print("\n[42] Unsloth 图片引擎")
+
+    Image = _pkg.UnslothImageEngine
+    check("unsloth_image 已注册", _pkg.ENGINE_REGISTRY.get("unsloth_image") is Image)
+    check("unsloth_image 模板已入 schema", "unsloth_image" in inst._engine_templates())
+    image_items = set(inst._engine_templates()["unsloth_image"]["items"])
+    check(
+        "unsloth_image 模板字段完整",
+        {"api_base", "model", "size", "timeout"} <= image_items,
+        str(sorted(image_items)),
+    )
+    check("注册图片钩子", hasattr(inst, "image_hook"))
+    check(
+        "图片钩子优先于 TTS",
+        "priority=1" in inspect.getsource(inst.image_hook),
+    )
+    check(
+        "图片钩子按模式互斥",
+        "_decide_reply_mode" in inspect.getsource(inst.image_hook),
+    )
+    check(
+        "图片引擎无试听",
+        "图片引擎不支持试听" in inspect.getsource(inst._run_preview_job),
+    )
+
+    image = Image(
+        {
+            "instance_name": "image",
+            "api_key": "k",
+            "api_base": "http://192.168.10.2:8908/v1",
+            "model": "unsloth/FLUX.2-klein-4B-GGUF",
+            "size": "1024x1024",
+        }
+    )
+    check("图片 api_base 去 /v1", image.api_base == "http://192.168.10.2:8908")
+    check("图片默认模型", image.model == "unsloth/FLUX.2-klein-4B-GGUF")
+    check("图片默认尺寸", image.size == "1024x1024")
+    check("图片 is_image", getattr(image, "is_image", False) is True)
+    check("图片尺寸-显式", image._parse_size("生成 768x512 的图") == "768x512")
+    check("图片尺寸-16:9", image._parse_size("画一张 16:9 的海报") == "1024x576")
+    check("图片尺寸-竖图", image._parse_size("来一张竖图") == "576x1024")
+    check("图片尺寸-默认", image._parse_size("画一只猫") == "1024x1024")
+
+    image_requests = []
+
+    def _image_handler(request: httpx.Request) -> httpx.Response:
+        image_requests.append(
+            (
+                request.method,
+                request.url.path,
+                request.headers.get("authorization"),
+                request.content,
+            )
+        )
+        if request.url.path == "/v1/images/generations":
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "b64_json": base64.b64encode(b"PNGDATA").decode(
+                                "ascii"
+                            )
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(404)
+
+    image._client = httpx.AsyncClient(transport=httpx.MockTransport(_image_handler))
+
+    async def _run_image():
+        result = await image.synthesize("画一张 16:9 的海报")
+        await image.close()
+        return result
+
+    image_bytes, image_fmt = asyncio.run(_run_image())
+    check("图片合成返回 png", (image_bytes, image_fmt) == (b"PNGDATA", "png"))
+    check(
+        "图片请求路径",
+        image_requests[0][1] == "/v1/images/generations",
+        str(image_requests[0][:3]),
+    )
+    check("图片请求带 Bearer", image_requests[0][2] == "Bearer k")
+    image_body = json.loads(image_requests[0][3])
+    check(
+        "图片请求模型",
+        image_body.get("model") == "unsloth/FLUX.2-klein-4B-GGUF",
+        str(image_body),
+    )
+    check("图片请求尺寸", image_body.get("size") == "1024x576", str(image_body))
+    check(
+        "图片请求 b64_json",
+        image_body.get("response_format") == "b64_json",
+        str(image_body),
+    )
+    check(
+        "图片请求 prompt",
+        image_body.get("prompt") == "画一张 16:9 的海报",
+        str(image_body),
+    )
+
+    inst.config["image_auto_route"] = True
+    check(
+        "图片路由-画图",
+        inst._should_route_to_image("帮我画一张猫的图片", "") is True,
+    )
+    check(
+        "图片路由-普通对话",
+        inst._should_route_to_image("今天天气不错", "") is False,
+    )
+    check(
+        "图片路由-标记",
+        inst._should_route_to_image("你好", "[[IMAGE]]") is True,
+    )
+    inst.config["image_auto_route"] = False
+    check(
+        "图片路由-关闭后不匹配",
+        inst._should_route_to_image("画一张图", "[[IMAGE]]") is False,
+    )
+    inst.config["image_auto_route"] = True
+    check(
+        "模式-图片",
+        inst._decide_reply_mode("sid", "画一张图", "") == "image",
+    )
+
+    cfg_image = _Config(
+        {
+            "enable": True,
+            "engines": [
+                {
+                    "instance_name": "image",
+                    "__template_key": "unsloth_image",
+                    "api_key": "k",
+                }
+            ],
+        }
+    )
+    inst_image = cls(_Context(), cfg_image)
+    image_payload = inst_image._build_engines_payload()
+    check(
+        "图片引擎 is_image True",
+        image_payload["engines"][0].get("is_image") is True,
+    )
+    check(
+        "图片引擎 is_music False",
+        image_payload["engines"][0].get("is_music") is False,
+    )
 
     print()
     if failures:

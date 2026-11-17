@@ -61,13 +61,21 @@ DEFAULT_USER_INTENT_PATTERNS = [
     r"(?:请问|介绍一下|解释一下|说明一下|什么是|是什么|是谁|叫什么|名字|名称|全称|简称|别名|英文名|中文名|又名|定义|含义|意思|列出|列举|对比|区别|步骤|教程|攻略|资料|来源|引用|查询|搜索|总结|概括|翻译|价格|多少钱|地址|电话|邮箱|网址|链接|怎么做|怎么用|怎么办|如何做|如何用|如何设置|如何评价|如何选择|在哪里|在哪儿|为什么|为啥)"
 ]
 
-# 音乐引擎模板与自动路由规则。
+# 音乐/图片引擎模板与自动路由规则。
 MUSIC_TEMPLATE_KEYS = {"unsloth_music"}
+IMAGE_TEMPLATE_KEYS = {"unsloth_image"}
 _MUSIC_MARKER_RE = re.compile(r"\[\[\s*MUSIC\s*\]\]", re.IGNORECASE)
+_IMAGE_MARKER_RE = re.compile(r"\[\[\s*IMAGE\s*\]\]", re.IGNORECASE)
 DEFAULT_MUSIC_ROUTE_PATTERNS = [
     r"(?:生成|写|创作|制作|编|来|做|给我|帮我).*(?:一首|一段|一曲|一个)?\s*(?:歌|歌曲|音乐|配乐|BGM|bgm|背景音乐|旋律|伴奏|奏乐|主题曲|片头曲|片尾曲)",
     r"(?i)\b(?:make|create|generate|compose|write|produce)\b.{0,40}\b(?:bgm|song|music|soundtrack|instrumental|melody)\b",
     r"(?i)\bbgm\b",
+]
+DEFAULT_IMAGE_ROUTE_PATTERNS = [
+    r"(?:画|绘制|生成|制作|做|来|给我|帮我).*(?:一张|一幅|一个)?\s*(?:图片|图像|照片|插画|海报|壁纸|头像|表情包|画|图)",
+    r"(?:画一张|画一幅|生成图片|生成图像|做一张图|来张图|来一张图|出图|AI绘画|文生图|画图)",
+    r"(?i)\b(?:draw|paint|generate|create|make)\b.{0,40}\b(?:image|picture|photo|illustration|poster|wallpaper|avatar|art)\b",
+    r"(?i)\b(?:image generation|text-to-image|t2i)\b",
 ]
 
 # ---------------------------------------------------------------------------
@@ -681,13 +689,21 @@ class UniversalTTSPlugin(Star):
             logger.error(f"[UniversalTTS] 创建引擎失败 ({name or '?'}): {e}")
             return None
 
+    @staticmethod
+    def _is_special_engine(engine) -> bool:
+        return bool(
+            getattr(engine, "is_music", False)
+            or getattr(engine, "is_image", False)
+        )
+
     def _get_fallback_tts_engine(self) -> TTSEngine | None:
-        """当前绑定/全局是音乐引擎时，普通 TTS 回退到第一个非音乐引擎。"""
+        """当前绑定/全局是音乐或图片引擎时，普通 TTS 回退到第一个普通引擎。"""
         for ec in self._list_engines():
-            if ec.get("__template_key") in MUSIC_TEMPLATE_KEYS:
+            key = ec.get("__template_key")
+            if key in MUSIC_TEMPLATE_KEYS or key in IMAGE_TEMPLATE_KEYS:
                 continue
             engine = self._get_engine_for_config(ec)
-            if engine is not None and not getattr(engine, "is_music", False):
+            if engine is not None and not self._is_special_engine(engine):
                 return engine
         return None
 
@@ -700,6 +716,18 @@ class UniversalTTSPlugin(Star):
                 return self._get_engine_for_config(ec)
         for ec in self._list_engines():
             if ec.get("__template_key") in MUSIC_TEMPLATE_KEYS:
+                return self._get_engine_for_config(ec)
+        return None
+
+    def _get_image_engine(self, session_id: str) -> TTSEngine | None:
+        """优先使用会话绑定的图片引擎，否则使用第一个已配置的图片引擎。"""
+        bound_name = self._session_bindings.get(session_id)
+        if bound_name and bound_name != DISABLED_ENGINE:
+            ec = self._find_engine_config(bound_name)
+            if ec and ec.get("__template_key") in IMAGE_TEMPLATE_KEYS:
+                return self._get_engine_for_config(ec)
+        for ec in self._list_engines():
+            if ec.get("__template_key") in IMAGE_TEMPLATE_KEYS:
                 return self._get_engine_for_config(ec)
         return None
 
@@ -729,6 +757,32 @@ class UniversalTTSPlugin(Star):
                     )
         return False
 
+    def _should_route_to_image(self, user_text: str, reply_text: str) -> bool:
+        """用户消息命中图片需求，或回复带 [[IMAGE]] 时自动路由。"""
+        if not self.config.get("image_auto_route", True):
+            return False
+        if _IMAGE_MARKER_RE.search(reply_text or ""):
+            return True
+        patterns = self.config.get("image_route_patterns")
+        if patterns is None:
+            patterns = DEFAULT_IMAGE_ROUTE_PATTERNS
+        if not isinstance(patterns, (list, tuple)):
+            return False
+        for raw in patterns:
+            pattern = str(raw).strip()
+            if not pattern:
+                continue
+            try:
+                if re.search(pattern, user_text or ""):
+                    return True
+            except re.error as e:
+                if pattern not in self._warned_skip_patterns:
+                    self._warned_skip_patterns.add(pattern)
+                    logger.warning(
+                        f"[UniversalTTS] 图片路由规则不是有效正则，已忽略: {pattern} ({e})"
+                    )
+        return False
+
     def _decide_reply_mode(
         self, session_id: str, user_text: str, reply_text: str
     ) -> str:
@@ -739,6 +793,10 @@ class UniversalTTSPlugin(Star):
         """
         if self._session_bindings.get(session_id) == DISABLED_ENGINE:
             return "none"
+        if self.config.get("image_auto_route", True) and self._should_route_to_image(
+            user_text, reply_text
+        ):
+            return "image"
         if self.config.get("music_auto_route", True):
             return (
                 "music"
@@ -755,12 +813,12 @@ class UniversalTTSPlugin(Star):
         return "tts"
 
     def _get_engine_for_session(
-        self, session_id: str, allow_music: bool = True
+        self, session_id: str, allow_special: bool = True
     ) -> TTSEngine | None:
         """获取指定会话应使用的引擎（有绑定用绑定，否则用全局）。
 
-        ``allow_music=False`` 时，如果绑定/全局是音乐引擎，回退到第一个非音乐引擎，
-        避免普通对话被音乐引擎接管。
+        ``allow_special=False`` 时，如果绑定/全局是音乐或图片引擎，回退到第一个
+        普通 TTS 引擎，避免普通对话被特殊引擎接管。
         """
         if session_id and session_id in self._session_bindings:
             bound_name = self._session_bindings[session_id]
@@ -768,14 +826,14 @@ class UniversalTTSPlugin(Star):
                 return None
             if bound_name in self._cached_engines:
                 engine = self._cached_engines[bound_name]
-                if not allow_music and getattr(engine, "is_music", False):
+                if not allow_special and self._is_special_engine(engine):
                     return self._get_fallback_tts_engine()
                 return engine
             ec = self._find_engine_config(bound_name)
             if ec:
                 engine = self._get_engine_for_config(ec)
                 if engine is not None:
-                    if not allow_music and getattr(engine, "is_music", False):
+                    if not allow_special and self._is_special_engine(engine):
                         return self._get_fallback_tts_engine()
                     return engine
                 # 创建失败，移除绑定
@@ -787,9 +845,9 @@ class UniversalTTSPlugin(Star):
                 del self._session_bindings[session_id]
                 self._save_bindings()
         if (
-            not allow_music
+            not allow_special
             and self._engine is not None
-            and getattr(self._engine, "is_music", False)
+            and self._is_special_engine(self._engine)
         ):
             return self._get_fallback_tts_engine()
         return self._engine
@@ -1002,6 +1060,80 @@ class UniversalTTSPlugin(Star):
             result.chain = [Comp.Plain("歌曲生成失败，请稍后重试")]
             self._suppress_core_tts(result)
 
+    @filter.on_decorating_result(priority=1)
+    async def image_hook(self, event: AstrMessageEvent):
+        """图片引擎：调用 /v1/images/generations，把结果挂到当前被动回复。
+
+        图片不是 TTS，因此绕过触发概率、字数上限、智能跳过和用户意图跳过；
+        只受插件总开关和 /tts_off 控制。
+        """
+        if not self.config.get("enable", True):
+            return
+        if not self._runtime_enabled:
+            return
+        result = event.get_result() if event is not None else None
+        if not result or not result.chain or not result.is_llm_result():
+            return
+
+        text_parts = [
+            component.text
+            for component in result.chain
+            if isinstance(component, Comp.Plain) and component.text
+        ]
+        full_text = "".join(text_parts).strip()
+        if not full_text:
+            return
+
+        session_id = _get_session_id(event)
+        user_text = str(getattr(event, "message_str", "") or "").strip()
+        if self._decide_reply_mode(session_id, user_text, full_text) != "image":
+            return
+
+        engine = self._get_image_engine(session_id)
+        if engine is None:
+            logger.warning(
+                "[UniversalTTS] 命中图片需求，但没有配置 [Unsloth] 图片生成 引擎"
+            )
+            self._suppress_core_tts(result)
+            result.chain = [
+                Comp.Plain("图片引擎未配置，请在插件中添加 [Unsloth] 图片生成 引擎")
+            ]
+            return
+
+        try:
+            source_text = user_text or full_text
+            image_bytes, fmt = await self._synthesize_with_stats(engine, source_text)
+            image_path = self._temp_dir / f"image_{uuid.uuid4().hex}.{fmt or 'png'}"
+            await asyncio.to_thread(image_path.write_bytes, image_bytes)
+            self._cleanup_temp_files()
+            self._record_activity(session_id, engine.instance_name)
+
+            image = Comp.Image.fromFileSystem(path=str(image_path))
+            original_chain = list(result.chain)
+            new_chain = []
+            inserted = False
+            for component in result.chain:
+                if isinstance(component, Comp.Plain):
+                    if component.text and not inserted:
+                        new_chain.append(image)
+                        inserted = True
+                    continue
+                new_chain.append(component)
+            result.chain = new_chain
+            self._install_send_fallback(
+                event, result, [Comp.Plain("图片发送失败，请稍后重试")]
+            )
+            logger.info(
+                f"[UniversalTTS] 发送图片 ({engine.instance_name}): {source_text[:80]}"
+            )
+        except Exception as e:
+            logger.error(
+                f"[UniversalTTS] 图片生成失败 ({engine.instance_name}): "
+                f"{type(e).__name__}: {e}"
+            )
+            result.chain = [Comp.Plain("图片生成失败，请稍后重试")]
+            self._suppress_core_tts(result)
+
     @filter.on_decorating_result(priority=0)
     async def tts_hook(self, event: AstrMessageEvent):
         """钩子：在消息发送前将文本转为语音"""
@@ -1079,7 +1211,7 @@ class UniversalTTSPlugin(Star):
             return
 
         # 模式已判定为 tts，取非音乐引擎合成。
-        engine = self._get_engine_for_session(session_id, allow_music=False)
+        engine = self._get_engine_for_session(session_id, allow_special=False)
         if engine is None:
             return
 
@@ -1820,9 +1952,9 @@ class UniversalTTSPlugin(Star):
             for key in secrets:
                 item[key] = ""
             item["_secrets"] = secrets
-            item["is_music"] = (
-                str(item.get("__template_key") or "") in MUSIC_TEMPLATE_KEYS
-            )
+            template_key = str(item.get("__template_key") or "")
+            item["is_music"] = template_key in MUSIC_TEMPLATE_KEYS
+            item["is_image"] = template_key in IMAGE_TEMPLATE_KEYS
             item["stats"] = self._engine_stats_summary(str(item.get("instance_name") or ""))
             engines.append(item)
         payload = {
@@ -2360,6 +2492,12 @@ class UniversalTTSPlugin(Star):
         preview_timeout = PREVIEW_TIMEOUT
         try:
             engine = get_engine(engine_config, self.config)
+            if getattr(engine, "is_image", False):
+                job.update(
+                    status="error",
+                    error="图片引擎不支持试听，请直接在聊天中生成图片",
+                )
+                return
             if getattr(engine, "is_music", False):
                 preview_text = PREVIEW_MUSIC_TEXT
                 preview_timeout = PREVIEW_MUSIC_TIMEOUT

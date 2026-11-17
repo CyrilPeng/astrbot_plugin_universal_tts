@@ -60,6 +60,23 @@
     ],
     "hint": "匹配用户消息；命中任意一条即自动使用音乐引擎。每行一个正则。"
   },
+  "image_auto_route": {
+    "description": "图片请求自动路由",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，用户消息命中画图/图片需求或回复带 [[IMAGE]] 时自动使用 [Unsloth] 图片生成 引擎；普通对话继续走 TTS。"
+  },
+  "image_route_patterns": {
+    "description": "图片请求匹配规则（正则）",
+    "type": "list",
+    "default": [
+      "(?:画|绘制|生成|制作|做|来|给我|帮我).*(?:一张|一幅|一个)?\\s*(?:图片|图像|照片|插画|海报|壁纸|头像|表情包|画|图)",
+      "(?:画一张|画一幅|生成图片|生成图像|做一张图|来张图|来一张图|出图|AI绘画|文生图|画图)",
+      "(?i)\\b(?:draw|paint|generate|create|make)\\b.{0,40}\\b(?:image|picture|photo|illustration|poster|wallpaper|avatar|art)\\b",
+      "(?i)\\b(?:image generation|text-to-image|t2i)\\b"
+    ],
+    "hint": "匹配用户消息；命中任意一条即自动使用图片引擎。每行一个正则。"
+  },
   "fallback_to_text_on_send_error": {
     "description": "语音发送失败时回退为文本",
     "type": "bool",
@@ -677,6 +694,44 @@
             "description": "超时（秒）",
             "type": "int",
             "default": 30
+          }
+        }
+      },
+      "unsloth_image": {
+        "name": "[Unsloth] 图片生成（/v1/images/generations）",
+        "hint": "调用本地 Unsloth Studio 图片模型；命中图片请求时自动路由，回复 [[IMAGE]] 或直接描述即可。",
+        "items": {
+          "instance_name": {
+            "description": "实例名称（用于标识和切换）",
+            "type": "string",
+            "default": "unsloth_image"
+          },
+          "api_key": {
+            "description": "API Key",
+            "type": "string",
+            "default": ""
+          },
+          "api_base": {
+            "description": "API Base URL",
+            "type": "string",
+            "default": "http://127.0.0.1:8888",
+            "hint": "Studio 地址；带不带 /v1 都可以，插件会自动归一化"
+          },
+          "model": {
+            "description": "图片模型 ID",
+            "type": "string",
+            "default": "unsloth/FLUX.2-klein-4B-GGUF"
+          },
+          "size": {
+            "description": "默认尺寸",
+            "type": "string",
+            "default": "1024x1024",
+            "hint": "用户消息未指定尺寸时使用；支持 1024x1024、1024x576 等，消息里的 16:9/竖图 也会覆盖"
+          },
+          "timeout": {
+            "description": "超时（秒）",
+            "type": "int",
+            "default": 300
           }
         }
       },

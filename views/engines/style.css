@@ -250,6 +250,11 @@ body {
   color: #1f2328;
 }
 
+.badge-image {
+  background: var(--ok);
+  color: #ffffff;
+}
+
 .row-actions {
   display: flex;
   flex-shrink: 0;
