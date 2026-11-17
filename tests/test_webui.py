@@ -684,11 +684,16 @@ def main():
     check("读取成功", res.get("__ok__") is True, str(res)[:160])
     payload = res.get("data") or {}
     fields = {f["key"]: f for f in payload.get("fields", [])}
-    check("返回 12 个字段", len(fields) == 12, str(sorted(fields)))
+    check("返回 14 个字段", len(fields) == 14, str(sorted(fields)))
     check("含智能跳过字段", "tts_skip_code_blocks" in fields and "tts_skip_patterns" in fields)
     check(
         "含用户意图跳过字段",
         "tts_skip_user_intent_patterns" in fields,
+        str(sorted(fields)),
+    )
+    check(
+        "含音乐自动路由字段",
+        "music_auto_route" in fields and "music_route_patterns" in fields,
         str(sorted(fields)),
     )
     check("不含 engines", "engines" not in fields)
@@ -1845,6 +1850,62 @@ def main():
     check(
         "音乐钩子使用用户输入",
         "message_str" in inspect.getsource(inst.music_hook),
+    )
+    check(
+        "音乐钩子支持自动路由",
+        "music_auto_route" in inspect.getsource(inst.music_hook),
+    )
+    check(
+        "TTS 钩子排除音乐引擎",
+        "allow_music=False" in inspect.getsource(inst.tts_hook),
+    )
+
+    inst.config["music_auto_route"] = True
+    check(
+        "音乐路由-生成配乐",
+        inst._should_route_to_music("帮我生成一段有乡村烟火气的奏乐", "") is True,
+    )
+    check(
+        "音乐路由-写歌",
+        inst._should_route_to_music("写一首关于城市的歌", "") is True,
+    )
+    check(
+        "音乐路由-普通对话",
+        inst._should_route_to_music("今天天气不错", "") is False,
+    )
+    check(
+        "音乐路由-标记",
+        inst._should_route_to_music("你好", "[[MUSIC]]") is True,
+    )
+    inst.config["music_auto_route"] = False
+    check(
+        "音乐路由-关闭后不匹配",
+        inst._should_route_to_music("写一首歌", "[[MUSIC]]") is False,
+    )
+    inst.config["music_auto_route"] = True
+
+    payload_music = inst._build_engines_payload()
+    check(
+        "普通引擎 is_music False",
+        all(not e.get("is_music") for e in payload_music["engines"]),
+    )
+    cfg_music = _Config(
+        {
+            "enable": True,
+            "engines": [
+                {
+                    "instance_name": "music",
+                    "__template_key": "unsloth_music",
+                    "api_key": "k",
+                }
+            ],
+        }
+    )
+    inst_music = cls(_Context(), cfg_music)
+    payload_music2 = inst_music._build_engines_payload()
+    check(
+        "音乐引擎 is_music True",
+        payload_music2["engines"][0].get("is_music") is True,
     )
 
     music = Music(

@@ -431,6 +431,16 @@ function renderRow(engine, index) {
     badge.textContent = t("badge_default", "默认");
     name.appendChild(badge);
   }
+  if (engine.is_music) {
+    const musicBadge = document.createElement("span");
+    musicBadge.className = "badge badge-music";
+    musicBadge.textContent = t("engine_music_badge", "音乐");
+    musicBadge.title = t(
+      "engine_music_hint",
+      "命中 BGM/歌曲请求时自动使用",
+    );
+    name.appendChild(musicBadge);
+  }
   main.appendChild(name);
 
   const meta = document.createElement("div");

@@ -61,6 +61,15 @@ DEFAULT_USER_INTENT_PATTERNS = [
     r"(?:请问|介绍一下|解释一下|说明一下|什么是|是什么|是谁|叫什么|名字|名称|全称|简称|别名|英文名|中文名|又名|定义|含义|意思|列出|列举|对比|区别|步骤|教程|攻略|资料|来源|引用|查询|搜索|总结|概括|翻译|价格|多少钱|地址|电话|邮箱|网址|链接|怎么做|怎么用|怎么办|如何做|如何用|如何设置|如何评价|如何选择|在哪里|在哪儿|为什么|为啥)"
 ]
 
+# 音乐引擎模板与自动路由规则。
+MUSIC_TEMPLATE_KEYS = {"unsloth_music"}
+_MUSIC_MARKER_RE = re.compile(r"\[\[\s*MUSIC\s*\]\]", re.IGNORECASE)
+DEFAULT_MUSIC_ROUTE_PATTERNS = [
+    r"(?:生成|写|创作|制作|编|来|做|给我|帮我).*(?:一首|一段|一曲|一个)?\s*(?:歌|歌曲|音乐|配乐|BGM|bgm|背景音乐|旋律|伴奏|奏乐|主题曲|片头曲|片尾曲)",
+    r"(?i)\b(?:make|create|generate|compose|write|produce)\b.{0,40}\b(?:bgm|song|music|soundtrack|instrumental|melody)\b",
+    r"(?i)\bbgm\b",
+]
+
 # ---------------------------------------------------------------------------
 # WebUI 试听 / 样本管理
 # ---------------------------------------------------------------------------
@@ -656,32 +665,108 @@ class UniversalTTSPlugin(Star):
                 return ec
         return None
 
-    def _get_engine_for_session(self, session_id: str) -> TTSEngine | None:
-        """获取指定会话应使用的引擎（有绑定用绑定，否则用全局）"""
+    def _get_engine_for_config(self, ec: dict) -> TTSEngine | None:
+        """按配置创建/复用引擎实例。"""
+        name = str(ec.get("instance_name") or "").strip() or str(
+            ec.get("__template_key") or ""
+        )
+        if name and name in self._cached_engines:
+            return self._cached_engines[name]
+        try:
+            engine = get_engine(ec, self.config)
+            if name:
+                self._cached_engines[name] = engine
+            return engine
+        except Exception as e:
+            logger.error(f"[UniversalTTS] 创建引擎失败 ({name or '?'}): {e}")
+            return None
+
+    def _get_fallback_tts_engine(self) -> TTSEngine | None:
+        """当前绑定/全局是音乐引擎时，普通 TTS 回退到第一个非音乐引擎。"""
+        for ec in self._list_engines():
+            if ec.get("__template_key") in MUSIC_TEMPLATE_KEYS:
+                continue
+            engine = self._get_engine_for_config(ec)
+            if engine is not None and not getattr(engine, "is_music", False):
+                return engine
+        return None
+
+    def _get_music_engine(self, session_id: str) -> TTSEngine | None:
+        """优先使用会话绑定的音乐引擎，否则使用第一个已配置的音乐引擎。"""
+        bound_name = self._session_bindings.get(session_id)
+        if bound_name and bound_name != DISABLED_ENGINE:
+            ec = self._find_engine_config(bound_name)
+            if ec and ec.get("__template_key") in MUSIC_TEMPLATE_KEYS:
+                return self._get_engine_for_config(ec)
+        for ec in self._list_engines():
+            if ec.get("__template_key") in MUSIC_TEMPLATE_KEYS:
+                return self._get_engine_for_config(ec)
+        return None
+
+    def _should_route_to_music(self, user_text: str, reply_text: str) -> bool:
+        """用户消息命中音乐需求，或回复带 [[MUSIC]] 时自动路由。"""
+        if not self.config.get("music_auto_route", True):
+            return False
+        if _MUSIC_MARKER_RE.search(reply_text or ""):
+            return True
+        patterns = self.config.get("music_route_patterns")
+        if patterns is None:
+            patterns = DEFAULT_MUSIC_ROUTE_PATTERNS
+        if not isinstance(patterns, (list, tuple)):
+            return False
+        for raw in patterns:
+            pattern = str(raw).strip()
+            if not pattern:
+                continue
+            try:
+                if re.search(pattern, user_text or ""):
+                    return True
+            except re.error as e:
+                if pattern not in self._warned_skip_patterns:
+                    self._warned_skip_patterns.add(pattern)
+                    logger.warning(
+                        f"[UniversalTTS] 音乐路由规则不是有效正则，已忽略: {pattern} ({e})"
+                    )
+        return False
+
+    def _get_engine_for_session(
+        self, session_id: str, allow_music: bool = True
+    ) -> TTSEngine | None:
+        """获取指定会话应使用的引擎（有绑定用绑定，否则用全局）。
+
+        ``allow_music=False`` 时，如果绑定/全局是音乐引擎，回退到第一个非音乐引擎，
+        避免普通对话被音乐引擎接管。
+        """
         if session_id and session_id in self._session_bindings:
             bound_name = self._session_bindings[session_id]
             if bound_name == DISABLED_ENGINE:
                 return None
-            # 检查同名引擎是否已缓存，复用实例
             if bound_name in self._cached_engines:
-                return self._cached_engines[bound_name]
-            # 创建新引擎实例并缓存
+                engine = self._cached_engines[bound_name]
+                if not allow_music and getattr(engine, "is_music", False):
+                    return self._get_fallback_tts_engine()
+                return engine
             ec = self._find_engine_config(bound_name)
             if ec:
-                try:
-                    engine = get_engine(ec, self.config)
-                    self._cached_engines[bound_name] = engine
+                engine = self._get_engine_for_config(ec)
+                if engine is not None:
+                    if not allow_music and getattr(engine, "is_music", False):
+                        return self._get_fallback_tts_engine()
                     return engine
-                except Exception as e:
-                    logger.error(f"[UniversalTTS] 会话绑定引擎创建失败 ({bound_name}): {e}")
-                    # 绑定失效，移除
-                    del self._session_bindings[session_id]
-                    self._save_bindings()
+                # 创建失败，移除绑定
+                del self._session_bindings[session_id]
+                self._save_bindings()
             else:
                 # 绑定的引擎已不存在，移除
                 logger.warning(f"[UniversalTTS] 会话绑定的引擎 '{bound_name}' 已不存在，已解除绑定")
                 del self._session_bindings[session_id]
                 self._save_bindings()
+        if (
+            not allow_music
+            and self._engine is not None
+            and getattr(self._engine, "is_music", False)
+        ):
+            return self._get_fallback_tts_engine()
         return self._engine
 
     async def initialize(self):
@@ -830,19 +915,38 @@ class UniversalTTSPlugin(Star):
             return
 
         session_id = _get_session_id(event)
-        engine = self._get_engine_for_session(session_id)
-        if engine is None or not getattr(engine, "is_music", False):
+        if self._session_bindings.get(session_id) == DISABLED_ENGINE:
+            self._suppress_core_tts(result)
             return
 
-        if getattr(engine, "require_marker", True) and not engine.has_marker(full_text):
-            # 没有 [[MUSIC]] 标记：普通文本回复，不生成歌曲，也不让核心 TTS 朗读。
-            self._suppress_core_tts(result)
-            event._universal_tts_music_handled = True
-            return
+        user_text = str(getattr(event, "message_str", "") or "").strip()
+        auto_route = bool(self.config.get("music_auto_route", True))
+        if auto_route:
+            if not self._should_route_to_music(user_text, full_text):
+                return
+            engine = self._get_music_engine(session_id)
+            if engine is None:
+                logger.warning(
+                    "[UniversalTTS] 命中音乐需求，但没有配置 [Unsloth] 歌曲/音乐 引擎"
+                )
+                self._suppress_core_tts(result)
+                result.chain = [
+                    Comp.Plain("音乐引擎未配置，请在插件中添加 [Unsloth] 歌曲/音乐 引擎")
+                ]
+                event._universal_tts_music_handled = True
+                return
+        else:
+            engine = self._get_engine_for_session(session_id)
+            if engine is None or not getattr(engine, "is_music", False):
+                return
+            if getattr(engine, "require_marker", True) and not engine.has_marker(full_text):
+                # 手动绑定模式：没有 [[MUSIC]] 标记时按普通文本处理。
+                self._suppress_core_tts(result)
+                event._universal_tts_music_handled = True
+                return
 
         try:
             # 用户输入才是歌词/风格的来源；LLM 回复只用来判断 [[MUSIC]] 标记。
-            user_text = str(getattr(event, "message_str", "") or "").strip()
             source_text = user_text or full_text
             audio_bytes, fmt = await self._synthesize_with_stats(engine, source_text)
             audio_path = self._temp_dir / f"music_{uuid.uuid4().hex}.{fmt}"
@@ -895,11 +999,6 @@ class UniversalTTSPlugin(Star):
             return
         if getattr(event, "_universal_tts_music_handled", False):
             return
-        if event is not None:
-            session_engine = self._get_engine_for_session(_get_session_id(event))
-            if session_engine is not None and getattr(session_engine, "is_music", False):
-                # 音乐引擎由 music_hook 处理，避免 TTS 抢先合成。
-                return
 
         result = event.get_result() if event is not None else None
 
@@ -941,8 +1040,15 @@ class UniversalTTSPlugin(Star):
         if len(full_text) < 1:
             return
 
-        # 用户意图跳过：介绍/解释/名称/步骤/价格等知识型提问优先返回文本。
         user_text = str(getattr(event, "message_str", "") or "").strip()
+        # 音乐请求交给 music_hook；避免 TTS 抢先合成。
+        if self.config.get("music_auto_route", True) and self._should_route_to_music(
+            user_text, full_text
+        ):
+            self._suppress_core_tts(result)
+            return
+
+        # 用户意图跳过：介绍/解释/名称/步骤/价格等知识型提问优先返回文本。
         user_skip_reason = self._should_skip_user_intent(user_text)
         if user_skip_reason:
             logger.debug(
@@ -974,7 +1080,7 @@ class UniversalTTSPlugin(Star):
         if self._session_bindings.get(session_id) == DISABLED_ENGINE:
             self._suppress_core_tts(result)
             return
-        engine = self._get_engine_for_session(session_id)
+        engine = self._get_engine_for_session(session_id, allow_music=False)
         if engine is None:
             return
 
@@ -1715,6 +1821,9 @@ class UniversalTTSPlugin(Star):
             for key in secrets:
                 item[key] = ""
             item["_secrets"] = secrets
+            item["is_music"] = (
+                str(item.get("__template_key") or "") in MUSIC_TEMPLATE_KEYS
+            )
             item["stats"] = self._engine_stats_summary(str(item.get("instance_name") or ""))
             engines.append(item)
         payload = {

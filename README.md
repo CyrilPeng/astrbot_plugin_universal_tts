@@ -111,7 +111,9 @@ POST {api_base}/audio/speech                 {"model", "voice", "input", "respon
 [[MUSIC]]
 ```
 
-- `[[MUSIC]]` 标记会触发音乐生成；默认 `require_marker: true`
+- 默认 `music_auto_route: true`：用户消息命中 BGM/歌曲需求，或回复带 `[[MUSIC]]` 标记，自动使用音乐引擎
+- 普通对话继续走 TTS 引擎，不需要 `/tts_bind` 音乐引擎
+- WebUI 引擎列表会给音乐引擎显示「音乐」徽标
 - 插件把**用户消息**交给内置 chat 模型，生成英文 `style` 和 `lyrics`
 - 然后调用 `/v1/audio/run`；过程中不需要用户或 skill 提供 JSON
 - 没有歌词 → 器乐；有歌词 → 人声歌曲
@@ -126,6 +128,20 @@ POST {api_base}/audio/speech                 {"model", "voice", "input", "respon
 HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive:Q6_K
 ```
 
+### 自动路由
+
+| 配置项 | 说明 |
+|---|---|
+| `music_auto_route` | 开启后自动检测音乐请求；默认开启 |
+| `music_route_patterns` | 匹配用户消息的正则列表；命中任意一条即使用音乐引擎 |
+
+规则：
+
+- 用户消息命中 `music_route_patterns`，或回复带 `[[MUSIC]]` → 使用**第一个音乐引擎**
+- 其它回复 → 使用会话绑定/全局 TTS 引擎
+- 如果会话绑定/全局是音乐引擎，普通对话会回退到第一个非音乐 TTS 引擎
+- `require_marker` 只在关闭自动路由、手动绑定音乐引擎时生效
+
 ### 配置项
 
 | 配置项 | 说明 |
@@ -134,14 +150,14 @@ HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive:Q6_K
 | `api_base` | Studio 地址，默认 `http://127.0.0.1:8888`；带不带 `/v1` 都可以，插件会自动归一化 |
 | `model` | 音乐模型 ID；留空使用 Studio 当前加载的模型 |
 | `duration` | 歌曲默认时长，默认 30 秒 |
-| `require_marker` | 是否必须带 `[[MUSIC]]` 标记，默认开启 |
+| `require_marker` | 手动绑定模式下是否必须带 `[[MUSIC]]` 标记，默认开启；自动路由开启时由路由规则决定 |
 | `timeout` | 音乐生成超时，默认 1800 秒 |
 
 ### 与 bgm-generation skill 的关系
 
-universal_tts 歌曲引擎自己会调用 chat 模型生成风格和歌词，不需要 skill 输出 payload。
+bgm-generation 现在是一个轻量提示：识别 BGM/歌曲请求并回复 `[[MUSIC]]`。
 
-bgm-generation 仍可用于独立生成 BGM/歌曲（例如保存到文件、手动控制提示词和歌词），两者互不依赖。
+模型选择、API Key、chat 模型、风格/歌词生成和音频发送全部由 universal_tts 插件完成；skill 不再查询模型、调用 API 或独立生成音频。
 
 > 音乐生成可能需要几十秒到几分钟；回复会等待生成完成，超过平台回复窗口时可能被平台截断。
 
@@ -150,6 +166,7 @@ bgm-generation 仍可用于独立生成 BGM/歌曲（例如保存到文件、手
 ## 通用功能
 
 - 会话级引擎绑定：不同群聊/私聊可使用不同引擎
+- 自动内容路由：普通对话走 TTS，BGM/歌曲请求自动走音乐引擎
 - 运行时热切换引擎，无需重启
 - 全局 TTS 开关、单会话禁音、字数上限
 - 智能跳过：代码块、纯链接、自定义正则命中的回复不朗读

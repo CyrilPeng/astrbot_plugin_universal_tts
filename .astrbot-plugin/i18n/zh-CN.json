@@ -13,6 +13,8 @@
       "delete": "删除",
       "activate": "设为默认",
       "badge_default": "默认",
+      "engine_music_badge": "音乐",
+      "engine_music_hint": "命中 BGM/歌曲请求时自动使用",
       "empty": "还没有配置任何引擎，点击右上角「新建引擎」开始。",
       "unnamed": "（未命名）",
       "unknown_template": "未知类型",
