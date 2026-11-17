@@ -264,9 +264,9 @@ function sleep(ms) {
  * 后端把合成放到后台任务里，这里只发短请求 —— 因为视图经由反向代理访问，
  * 单个请求挂太久会被中间层以 524 掐断（实测不到 30 秒就会发生）。
  */
-async function waitForPreview(jobId) {
+async function waitForPreview(jobId, maxAttempts = PREVIEW_POLL_MAX) {
   let lastError = null;
-  for (let attempt = 0; attempt < PREVIEW_POLL_MAX; attempt += 1) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     await sleep(attempt === 0 ? 300 : PREVIEW_POLL_INTERVAL);
     let data = null;
     try {
@@ -289,8 +289,11 @@ async function waitForPreview(jobId) {
 
 async function runPreview(payload, button) {
   const original = button.textContent;
+  const isMusic = Boolean(editing && editing.templateKey === "unsloth_music");
   button.disabled = true;
-  button.textContent = t("testing", "合成中…");
+  button.textContent = isMusic
+    ? t("preview_music_testing", "歌曲生成中…")
+    : t("testing", "合成中…");
   setEditorError("");
   setBanner("");
   try {
@@ -299,7 +302,8 @@ async function runPreview(payload, button) {
     if (!jobId) {
       throw new Error(t("preview_empty", "试听任务提交失败"));
     }
-    const data = await waitForPreview(jobId);
+    // 音乐模型冷启动/推理可能到分钟级，前端轮询也要放宽。
+    const data = await waitForPreview(jobId, isMusic ? 450 : PREVIEW_POLL_MAX);
     if (!data.audio) {
       throw new Error(t("preview_empty", "引擎没有返回音频"));
     }

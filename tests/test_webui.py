@@ -341,6 +341,24 @@ def main():
     check("空密钥不列入 _secrets", e1["_secrets"] == [])
     check("非敏感字段保留", e0["api_base"].endswith("/v1"))
     check("templates 已返回", len(payload["templates"]) == 11, str(len(payload["templates"])))
+    expected_templates = {
+        "mimo_v2_5",
+        "mimo_v2_5_voicedesign",
+        "mimo_v2_5_voiceclone",
+        "openai_compat",
+        "openai_clone",
+        "volcengine",
+        "aliyun",
+        "azure",
+        "elevenlabs",
+        "custom_http",
+        "unsloth_music",
+    }
+    check(
+        "原有引擎模板全部保留",
+        expected_templates <= set(payload["templates"]),
+        str(sorted(payload["templates"])),
+    )
 
     print("\n[3] 字段类型转换")
     check("int 转换", inst._coerce_field("30", "int", 0) == 30)
@@ -1851,6 +1869,32 @@ def main():
         check("无标记不合成", False)
     except RuntimeError:
         check("无标记不合成", True)
+
+    music_default = Music(
+        {"instance_name": "music2", "api_key": "k", "lyrics": "默认歌词"}
+    )
+    explicit_empty = music_default._parse_reply(
+        '[[MUSIC]]\n{"style": "x", "lyrics": "", "duration": 5}'
+    )
+    check("显式空歌词不回退", explicit_empty["lyrics"] == "", str(explicit_empty))
+    missing_lyrics = music_default._parse_reply(
+        '[[MUSIC]]\n{"style": "x", "duration": 5}'
+    )
+    check(
+        "缺省歌词回退配置",
+        missing_lyrics["lyrics"] == "默认歌词",
+        str(missing_lyrics),
+    )
+    check("音乐试听文本带标记", "[[MUSIC]]" in module.PREVIEW_MUSIC_TEXT)
+    check("音乐试听超时更宽", module.PREVIEW_MUSIC_TIMEOUT > module.PREVIEW_TIMEOUT)
+    check("非音乐试听仍用原文本", module.PREVIEW_TEXT == "你好，这是一段音色试听。")
+    check("非音乐试听超时仍是 60", module.PREVIEW_TIMEOUT == 60)
+    for engine_name in ("MiMoV25Engine", "OpenAICompatEngine", "CustomHTTPEngine"):
+        engine_cls = getattr(_pkg, engine_name)
+        check(
+            f"{engine_name} 不是音乐引擎",
+            not getattr(engine_cls, "is_music", False),
+        )
 
     requests = []
 

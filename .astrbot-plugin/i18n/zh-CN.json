@@ -34,6 +34,7 @@
       "invalid_integer": "「{field}」需要填写整数",
       "preview": "试听",
       "testing": "合成中…",
+      "preview_music_testing": "歌曲生成中…",
       "preview_ok": "试听成功（{fmt} · {ms} ms · {kb} KB）",
       "preview_empty": "试听任务提交失败",
       "preview_unplayable": "合成成功，但格式 {fmt} 无法在浏览器中播放。",

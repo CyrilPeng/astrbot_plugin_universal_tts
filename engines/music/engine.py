@@ -88,7 +88,7 @@ class UnslothMusicEngine(TTSEngine):
         """从回复里提取 style / lyrics / duration；没有标记时把全文当风格。"""
         source = text or ""
         style = ""
-        lyrics = ""
+        lyrics = None
         duration = None
         model = None
 
@@ -112,7 +112,9 @@ class UnslothMusicEngine(TTSEngine):
                 data = None
             if isinstance(data, dict):
                 style = str(data.get("style") or data.get("prompt") or "").strip()
-                lyrics = str(data.get("lyrics") or "").strip()
+                if "lyrics" in data:
+                    # 显式给空歌词表示器乐，不回落到默认歌词。
+                    lyrics = str(data.get("lyrics") or "").strip()
                 duration = data.get("duration") or data.get("duration_s")
                 model = str(data.get("model") or "").strip() or None
 
@@ -120,8 +122,9 @@ class UnslothMusicEngine(TTSEngine):
             style = (source if not marker else "").strip() or self.style_prompt
         if not style:
             style = "instrumental background music"
-        if not lyrics:
+        if lyrics is None:
             lyrics = self.lyrics
+        lyrics = (lyrics or "").strip()
         if duration is None:
             duration = self.duration
         try:

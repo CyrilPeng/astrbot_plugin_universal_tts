@@ -67,10 +67,17 @@ DEFAULT_USER_INTENT_PATTERNS = [
 
 # 试听用的固定短句：保持较短，避免 base64 传输过大
 PREVIEW_TEXT = "你好，这是一段音色试听。"
+# 音乐引擎试听：用 [[MUSIC]] + 5 秒短样本，避免一次生成整首歌。
+PREVIEW_MUSIC_TEXT = (
+    "[[MUSIC]]\n"
+    '{"style": "short ambient instrumental test", "lyrics": "", "duration": 5}'
+)
 # 试听音频上限，超过则拒绝回传（base64 会再膨胀 4/3）
 PREVIEW_MAX_BYTES = 4 * 1024 * 1024
 # 单次试听的硬超时：超时即判失败，避免请求无限挂起被网关掐断
 PREVIEW_TIMEOUT = 60
+# 音乐模型冷启动/推理可能超过 60 秒；试听任务单独放宽。
+PREVIEW_MUSIC_TIMEOUT = 300
 # 试听 / 保存任务结果的保留时长与数量上限
 PREVIEW_JOB_TTL = 300
 PREVIEW_MAX_JOBS = 20
@@ -2241,15 +2248,20 @@ class UniversalTTSPlugin(Star):
 
         engine = None
         started = time.monotonic()
+        preview_text = PREVIEW_TEXT
+        preview_timeout = PREVIEW_TIMEOUT
         try:
             engine = get_engine(engine_config, self.config)
+            if getattr(engine, "is_music", False):
+                preview_text = PREVIEW_MUSIC_TEXT
+                preview_timeout = PREVIEW_MUSIC_TIMEOUT
             audio, audio_format = await asyncio.wait_for(
-                engine.synthesize(PREVIEW_TEXT), timeout=PREVIEW_TIMEOUT
+                engine.synthesize(preview_text), timeout=preview_timeout
             )
         except asyncio.TimeoutError:
             job.update(
                 status="error",
-                error=f"合成超时（超过 {PREVIEW_TIMEOUT} 秒），请检查接口状态或网络",
+                error=f"合成超时（超过 {preview_timeout} 秒），请检查接口状态或网络",
             )
             return
         except Exception as e:
@@ -2283,7 +2295,7 @@ class UniversalTTSPlugin(Star):
             format=fmt,
             bytes=len(audio),
             playable=fmt in _PLAYABLE_FORMATS,
-            text=PREVIEW_TEXT,
+            text=preview_text,
             took_ms=int((time.monotonic() - started) * 1000),
         )
 

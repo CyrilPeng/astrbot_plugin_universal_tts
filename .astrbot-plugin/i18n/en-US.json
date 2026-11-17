@@ -34,6 +34,7 @@
       "invalid_integer": "“{field}” must be an integer",
       "preview": "Preview",
       "testing": "Synthesizing…",
+      "preview_music_testing": "Generating song…",
       "preview_ok": "Preview ready ({fmt} · {ms} ms · {kb} KB)",
       "preview_empty": "Failed to submit the preview job",
       "preview_unplayable": "Synthesis succeeded, but format {fmt} cannot be played in the browser.",
